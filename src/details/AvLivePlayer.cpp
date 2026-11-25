@@ -39,6 +39,7 @@
 #include "PlaylistTimeline.h"
 #include "TraceUtil.h"
 
+#include <coral/selection/DefaultParameters.h>
 #include <coral/selection/DefaultTrackSelector.h>
 
 #include <media/MetadataEntries.h>
@@ -998,6 +999,20 @@ bool AvLivePlayer::handleMessage(Message* msg) {
       reselectTracksInternal();
       break;
     }
+    case MSG_SET_PREFERRED_AUDIO_LANGUAGE: {
+      std::string language;
+      {
+        const std::lock_guard<Mutex> lock(outputLock);
+        language = preferredAudioLanguage;
+      }
+      if (const auto selector = std::dynamic_pointer_cast<DefaultTrackSelector>(trackSelector);
+          selector != nullptr) {
+        ParametersBuilder builder(selector->getParameters());
+        builder.setPreferredAudioLanguage(language);
+        selector->setParameters(builder.build());
+      }
+      break;
+    }
     case MSG_VIDEO_COLOR_INFO_CHANGED: {
       setVideoColorInfoInternal(UseMessageData<VideoColorInfo>(msg->msgData));
       break;
@@ -1631,6 +1646,27 @@ void AvLivePlayer::setThumbnailProvider(std::shared_ptr<ThumbnailProvider> provi
 std::shared_ptr<ThumbnailProvider> AvLivePlayer::getThumbnailProvider() const {
   const std::lock_guard<Mutex> lock(outputLock);
   return thumbnailProvider;
+}
+
+void AvLivePlayer::setPreferredAudioLanguage(const std::string& language) {
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    preferredAudioLanguage = language;
+  }
+  // The track selector belongs to the playback thread; apply the preference there.
+  if (msgHandler != nullptr) {
+    msgHandler->sendEmptyMessage(MSG_SET_PREFERRED_AUDIO_LANGUAGE);
+  }
+}
+
+std::string AvLivePlayer::getPreferredAudioLanguage() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return preferredAudioLanguage;
+}
+
+std::string AvLivePlayer::getPreferredTextLanguage() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return preferredTextLanguage;
 }
 
 void AvLivePlayer::requestThumbnail(const int64_t positionUs, ThumbnailProvider::Callback callback) {

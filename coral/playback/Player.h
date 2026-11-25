@@ -282,6 +282,23 @@ public:
   }
 
   /**
+   * Sets the preferred audio language as an IETF BCP 47 tag.
+   *
+   * <p>An explicit {@code selectTrack} on an audio track still wins. Empty clears the preference.
+   */
+  virtual void setPreferredAudioLanguage(const std::string& language) {
+    static_cast<void>(language);
+  }
+
+  [[nodiscard]] virtual std::string getPreferredAudioLanguage() const {
+    return {};
+  }
+
+  [[nodiscard]] virtual std::string getPreferredTextLanguage() const {
+    return {};
+  }
+
+  /**
    * Returns the tracks of the current media item and the current selection.
    *
    * <p>An empty value is returned before the first period is prepared. The default implementation

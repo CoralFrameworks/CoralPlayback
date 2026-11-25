@@ -131,6 +131,12 @@ public:
 
   void requestThumbnail(int64_t positionUs, ThumbnailProvider::Callback callback) override;
 
+  void setPreferredAudioLanguage(const std::string& language) override;
+
+  [[nodiscard]] std::string getPreferredAudioLanguage() const override;
+
+  [[nodiscard]] std::string getPreferredTextLanguage() const override;
+
   void selectTrack(int rendererIndex, int groupIndex, int trackIndex) override;
 
   void clearTrackSelection(int rendererIndex) override;
@@ -690,6 +696,7 @@ private:
   /** Guards the outputs, which the application thread sets and the playback thread reads. */
   mutable Mutex outputLock;
   std::shared_ptr<TextOutput> textOutput;
+  std::string preferredAudioLanguage;
   std::string preferredTextLanguage;
   bool selectUndeterminedTextLanguage = true;
   std::atomic<bool> subtitlesEnabled{true};
@@ -796,6 +803,7 @@ private:
   static constexpr int MSG_CLEAR_TRACK_SELECTION = 29;
   static constexpr int MSG_SET_VIDEO_MIRROR = 30;
   static constexpr int MSG_VIDEO_COLOR_INFO_CHANGED = 31;
+  static constexpr int MSG_SET_PREFERRED_AUDIO_LANGUAGE = 32;
 
   static constexpr int64_t ACTIVE_INTERVAL_MS = 10;
   static constexpr int64_t IDLE_INTERVAL_MS = 1000;

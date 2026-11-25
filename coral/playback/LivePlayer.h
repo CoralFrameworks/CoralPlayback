@@ -161,6 +161,12 @@ public:
 
   void requestThumbnail(int64_t positionUs, ThumbnailProvider::Callback callback) override;
 
+  void setPreferredAudioLanguage(const std::string& language) override;
+
+  [[nodiscard]] std::string getPreferredAudioLanguage() const override;
+
+  [[nodiscard]] std::string getPreferredTextLanguage() const override;
+
   void selectTrack(int rendererIndex, int groupIndex, int trackIndex) override;
 
   void clearTrackSelection(int rendererIndex) override;

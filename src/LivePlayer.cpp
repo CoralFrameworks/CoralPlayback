@@ -196,6 +196,18 @@ void LivePlayer::requestThumbnail(const int64_t positionUs, ThumbnailProvider::C
   mImpl->requestThumbnail(positionUs, std::move(callback));
 }
 
+void LivePlayer::setPreferredAudioLanguage(const std::string& language) {
+  mImpl->setPreferredAudioLanguage(language);
+}
+
+std::string LivePlayer::getPreferredAudioLanguage() const {
+  return mImpl->getPreferredAudioLanguage();
+}
+
+std::string LivePlayer::getPreferredTextLanguage() const {
+  return mImpl->getPreferredTextLanguage();
+}
+
 void LivePlayer::selectTrack(int rendererIndex, int groupIndex, int trackIndex) {
   mImpl->selectTrack(rendererIndex, groupIndex, trackIndex);
 }
