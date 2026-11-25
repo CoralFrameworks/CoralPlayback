@@ -306,6 +306,7 @@ set(PUBLIC_HDRS
     coral/playback/StandaloneClock.h
     coral/playback/TextOutput.h
     coral/playback/Thumbnail.h
+    coral/playback/ThumbnailCache.h
     coral/playback/TimedFormatQueue.h
     coral/playback/Tracks.h
     coral/playback/VideoColorInfo.h
@@ -428,6 +429,7 @@ set(SRCS
     src/details/SubtitleOverlayNode.cpp
     src/details/SubtitleOverlayNode.h
     src/details/TextRenderer.cpp
+    src/details/ThumbnailCache.cpp
     src/details/TextRenderer.h
     src/details/VideoLayoutPass.cpp
     src/details/VideoLayoutPass.h
