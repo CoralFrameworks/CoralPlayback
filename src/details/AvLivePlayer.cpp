@@ -1713,6 +1713,17 @@ void AvLivePlayer::requestThumbnail(const int64_t positionUs, ThumbnailProvider:
   }
 }
 
+void AvLivePlayer::prefetchThumbnail(const int64_t positionUs) {
+  std::shared_ptr<ThumbnailProvider> provider;
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    provider = thumbnailProvider;
+  }
+  if (provider != nullptr) {
+    provider->prefetch(positionUs);
+  }
+}
+
 void AvLivePlayer::onVideoFrameRendered(std::shared_ptr<Fence> fence) {
   const auto positionUs = pendingVideoFramePositionUs.load(std::memory_order_relaxed);
   const std::lock_guard<Mutex> lock(outputLock);

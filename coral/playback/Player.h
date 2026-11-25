@@ -281,6 +281,11 @@ public:
     static_cast<void>(callback);
   }
 
+  /** Warms the installed provider for a position without delivering a frame. */
+  virtual void prefetchThumbnail(int64_t positionUs) {
+    static_cast<void>(positionUs);
+  }
+
   /**
    * Sets the preferred audio language as an IETF BCP 47 tag.
    *

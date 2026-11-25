@@ -131,6 +131,8 @@ public:
 
   void requestThumbnail(int64_t positionUs, ThumbnailProvider::Callback callback) override;
 
+  void prefetchThumbnail(int64_t positionUs) override;
+
   void setPreferredAudioLanguage(const std::string& language) override;
 
   [[nodiscard]] std::string getPreferredAudioLanguage() const override;

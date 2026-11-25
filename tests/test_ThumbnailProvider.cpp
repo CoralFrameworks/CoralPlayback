@@ -36,11 +36,16 @@ public:
     }
   }
 
+  void prefetch(const int64_t positionUs) override {
+    prefetched.store(positionUs, std::memory_order_release);
+  }
+
   void cancel() override {
     cancelled.fetch_add(1, std::memory_order_acq_rel);
   }
 
   std::atomic<int64_t> requested{0};
+  std::atomic<int64_t> prefetched{0};
   std::atomic<int> cancelled{0};
 };
 
@@ -58,6 +63,9 @@ TEST(ThumbnailProviderTest, ForwardsRequestsAndCancelsOnRelease) {
   });
   EXPECT_EQ(provider->requested.load(std::memory_order_acquire), 1'500'000);
   EXPECT_EQ(receivedUs, 1'500'000);
+
+  player->prefetchThumbnail(2'500'000);
+  EXPECT_EQ(provider->prefetched.load(std::memory_order_acquire), 2'500'000);
 
   player->release();
   EXPECT_GE(provider->cancelled.load(std::memory_order_acquire), 1);

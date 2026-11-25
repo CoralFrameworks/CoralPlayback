@@ -55,6 +55,14 @@ public:
   /** Requests one thumbnail; a provider may coalesce or cancel earlier requests. */
   virtual void requestThumbnail(int64_t positionUs, Callback callback) = 0;
 
+  /**
+   * Warms the cache for a position without delivering a frame. Providers that have no prefetch
+   * capability keep the default no-op.
+   */
+  virtual void prefetch(int64_t positionUs) {
+    static_cast<void>(positionUs);
+  }
+
   /** Cancels outstanding requests; called when the player is released. */
   virtual void cancel() {}
 };

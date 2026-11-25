@@ -86,7 +86,7 @@ public:
    * Warms the bucket containing @p positionUs and its configured neighbours without a user
    * callback. A later request for the same bucket is served from the cache.
    */
-  void prefetch(int64_t positionUs);
+  void prefetch(int64_t positionUs) override;
 
   void cancel() override;
 
