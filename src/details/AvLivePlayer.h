@@ -106,7 +106,19 @@ public:
 
   void setVideoScalingMode(int mode) override;
 
+  void setVideoScaleMode(VideoScaleMode mode) override;
+
+  [[nodiscard]] VideoScaleMode getVideoScaleMode() const override {
+    return videoScaleMode.load(std::memory_order_relaxed);
+  }
+
   void setTextOutput(const std::shared_ptr<TextOutput>& output) override;
+
+  [[nodiscard]] Tracks getCurrentTracks() const override;
+
+  void selectTrack(int rendererIndex, int groupIndex, int trackIndex) override;
+
+  void clearTrackSelection(int rendererIndex) override;
 
   void setPreferredTextLanguage(const std::string& language, bool selectUndetermined) override;
 
@@ -178,6 +190,19 @@ public:
 
   [[nodiscard]] int64_t getCurrentPositionUs() const override {
     return playbackInfo.positionUs;
+  }
+
+  [[nodiscard]] int64_t getBufferedPositionUs() const override {
+    return playbackInfo.bufferedPositionUs;
+  }
+
+  [[nodiscard]] std::vector<BufferedRange> getBufferedRanges() const override {
+    const auto positionUs = playbackInfo.positionUs;
+    const auto bufferedPositionUs = playbackInfo.bufferedPositionUs;
+    if (bufferedPositionUs > positionUs) {
+      return { BufferedRange { positionUs, bufferedPositionUs } };
+    }
+    return {};
   }
 
   int64_t getDurationUs() const override {
@@ -378,6 +403,22 @@ private:
   void applyVideoEffectSurface(const std::shared_ptr<VideoSurface>& surface);
 
   void setVideoScalingModeInternal(const Message* msg);
+
+  struct TrackSelectionRequest {
+    int rendererIndex = 0;
+    int groupIndex = 0;
+    int trackIndex = 0;
+  };
+
+  void selectTrackInternal(const TrackSelectionRequest& request);
+
+  void clearTrackSelectionInternal(int rendererIndex);
+
+  /** Builds the public snapshot from the selector's current mapping and result. */
+  [[nodiscard]] Tracks buildCurrentTracks() const;
+
+  /** Delivers the current snapshot to the listeners. */
+  void dispatchTracksChanged();
 
   void setMediaItemInternal(const std::shared_ptr<MediaSource>& mediaSource);
 
@@ -629,6 +670,7 @@ private:
   /** The last cue group delivered, so the effect pipeline can be enabled after it. */
   AVCueGroup currentCueGroup;
   std::atomic<SubtitleRenderMode> subtitleRenderMode{ SubtitleRenderMode::kAuto };
+  std::atomic<VideoScaleMode> videoScaleMode{ VideoScaleMode::Fit };
   std::vector<std::shared_ptr<SelectionCapabilities>> rendererCapabilities;
   std::shared_ptr<TrackSelector> trackSelector;
   std::shared_ptr<TrackSelectorResult> emptyTrackSelectorResult;
@@ -716,6 +758,8 @@ private:
 
   /** Has no data: resumes the playback, restarting an ended player from the default position. */
   static constexpr int MSG_PLAY = 27;
+  static constexpr int MSG_SELECT_TRACK = 28;
+  static constexpr int MSG_CLEAR_TRACK_SELECTION = 29;
 
   static constexpr int64_t ACTIVE_INTERVAL_MS = 10;
   static constexpr int64_t IDLE_INTERVAL_MS = 1000;

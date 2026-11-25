@@ -131,7 +131,17 @@ public:
    */
   void setVideoScalingMode(int mode) override;
 
+  void setVideoScaleMode(VideoScaleMode mode) override;
+
+  [[nodiscard]] VideoScaleMode getVideoScaleMode() const override;
+
   void setTextOutput(const std::shared_ptr<TextOutput>& output) override;
+
+  [[nodiscard]] Tracks getCurrentTracks() const override;
+
+  void selectTrack(int rendererIndex, int groupIndex, int trackIndex) override;
+
+  void clearTrackSelection(int rendererIndex) override;
 
   /**
    * Sets the preferred language of the selected subtitle track, or clears it with an empty string.
@@ -284,6 +294,10 @@ public:
    * @return the current position in microseconds
    */
   [[nodiscard]] int64_t getCurrentPositionUs() const override;
+
+  [[nodiscard]] int64_t getBufferedPositionUs() const override;
+
+  [[nodiscard]] std::vector<BufferedRange> getBufferedRanges() const override;
 
   /**
    * Gets the duration of the file.

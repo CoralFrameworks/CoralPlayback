@@ -85,6 +85,11 @@ public:
     mVideoSizeSeen.store(true, std::memory_order_release);
   }
 
+  void onTracksChanged(const coral::Tracks& tracks) override {
+    static_cast<void>(tracks);
+    mTracksSeen.store(true, std::memory_order_release);
+  }
+
   void onPlayerError(const std::string& errorMessage) override {
     std::lock_guard<std::mutex> lock(mMutex);
     mError = errorMessage;
@@ -95,6 +100,9 @@ public:
   [[nodiscard]] bool videoSizeSeen() const {
     return mVideoSizeSeen.load(std::memory_order_acquire);
   }
+  [[nodiscard]] bool tracksSeen() const {
+    return mTracksSeen.load(std::memory_order_acquire);
+  }
   [[nodiscard]] bool failed() const { return mFailed.load(std::memory_order_acquire); }
   [[nodiscard]] std::string error() const {
     std::lock_guard<std::mutex> lock(mMutex);
@@ -104,6 +112,7 @@ public:
 private:
   std::atomic<bool> mReady{false};
   std::atomic<bool> mVideoSizeSeen{false};
+  std::atomic<bool> mTracksSeen{false};
   std::atomic<bool> mFailed{false};
   mutable std::mutex mMutex;
   std::string mError;
@@ -582,6 +591,35 @@ TEST(AppleIOSurfaceInputTest, HandlesSizeChangesWithoutStaleFrames) {
   engine->stop();
 }
 
+TEST(AppleLivePlayerEffectTest, ReportsTheAudioTrackWhenAudioIsEnabled) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/video720p_5s.mp4";
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = true});
+  ASSERT_NE(player, nullptr);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] {
+    return player->getPlaybackState() == coral::Player::State::STATE_READY ||
+           !player->getPlaybackErrorMessage().empty();
+  }, 10s)) << player->getPlaybackErrorMessage();
+  if (!player->getPlaybackErrorMessage().empty()) {
+    player->release();
+    GTEST_SKIP() << "audio playback is unavailable on this host: " << player->getPlaybackErrorMessage();
+  }
+
+  bool hasAudio = false;
+  bool audioSelected = false;
+  for (const auto& group : player->getCurrentTracks().groups) {
+    for (const auto& track : group.tracks) {
+      if (track.type == coral::TrackType::Audio) {
+        hasAudio = true;
+        audioSelected = audioSelected || track.selected;
+      }
+    }
+  }
+  EXPECT_TRUE(hasAudio);
+  EXPECT_TRUE(audioSelected);
+  player->release();
+}
+
 // ==================================================================================================
 // The player drives the IOSurface output
 // ==================================================================================================
@@ -684,6 +722,31 @@ TEST(AppleLivePlayerEffectTest, SamplesTheDecodersSurfaceThroughTheAppleSink) {
       << appleSink->convertedFrameCount();
   EXPECT_EQ(appleSink->convertedFrameCount(), 0u)
       << "the conversion ring is a fallback and should not run for a BGRA decoder";
+  EXPECT_TRUE(waitFor([&] { return probe->tracksSeen(); }, 10s))
+      << "the player never reported its tracks";
+  const auto tracks = player->getCurrentTracks();
+  ASSERT_FALSE(tracks.isEmpty()) << "the prepared period should report its video and audio tracks";
+  bool hasVideo = false;
+  bool hasAudio = false;
+  bool hasSelected = false;
+  for (const auto& group : tracks.groups) {
+    for (const auto& track : group.tracks) {
+      hasVideo = hasVideo || track.type == coral::TrackType::Video;
+      hasAudio = hasAudio || track.type == coral::TrackType::Audio;
+      hasSelected = hasSelected || track.selected;
+    }
+  }
+  EXPECT_TRUE(hasVideo);
+  EXPECT_TRUE(hasSelected);
+  EXPECT_GE(player->getBufferedPositionUs(), player->getCurrentPositionUs());
+  const auto bufferedRanges = player->getBufferedRanges();
+  if (player->getBufferedPositionUs() > player->getCurrentPositionUs()) {
+    EXPECT_FALSE(bufferedRanges.empty());
+    EXPECT_EQ(bufferedRanges.front().startUs, player->getCurrentPositionUs());
+  }
+  player->setVideoScaleMode(coral::Player::VideoScaleMode::Stretch);
+  EXPECT_EQ(player->getVideoScaleMode(), coral::Player::VideoScaleMode::Stretch);
+  player->setVideoScaleMode(coral::Player::VideoScaleMode::Fit);
   if (engine->backend() == EffectBackend::Metal) {
     EXPECT_TRUE(waitFor([&] { return effectInput.frameSink->isZeroCopy(); }, 10s))
         << "the Apple input should sample the decoder's IOSurface in place: "

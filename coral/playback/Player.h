@@ -19,6 +19,7 @@
 #include <coral/playback/MetadataOutput.h>
 #include <coral/playback/Parameters.h>
 #include <coral/playback/TextOutput.h>
+#include <coral/playback/Tracks.h>
 #include <coral/playback/Volume.h>
 #include <coral/source/MediaItem.h>
 #include <coral/source/MediaSourceEventListener.h>
@@ -117,6 +118,14 @@ public:
     virtual void onVideoSizeChanged(int width, int height) {}
 
     /**
+     * Called when the available tracks or their selection changed.
+     *
+     * <p>The snapshot is complete: a listener can replace its menu model with it. The callback runs
+     * on the thread the player's other events use.
+     */
+    virtual void onTracksChanged(const Tracks& tracks) {}
+
+    /**
      * Called when an error stopped the playback.
      *
      * @param errorMessage The message of the error.
@@ -139,6 +148,21 @@ public:
   virtual void setOutputSurface(const std::shared_ptr<VideoSurface>& surface) = 0;
 
   /**
+   * How the video is fitted into the output surface.
+   *
+   * <p>This is the platform-neutral form of {@link #setVideoScalingMode(int)}. `Fill` is a center
+   * crop; `Fit` letterboxes; `Stretch` ignores the aspect ratio. The default is `Fit`.
+   */
+  enum class VideoScaleMode : uint8_t {
+    /** Preserve the aspect ratio, letterboxing the remainder. */
+    Fit,
+    /** Preserve the aspect ratio, filling the output and cropping the overflow. */
+    Fill,
+    /** Fill the output without preserving the aspect ratio. */
+    Stretch,
+  };
+
+  /**
    * Sets video scaling mode. To make the target video scaling mode effective during playback, this
    * method must be called after data source is set. If not called, the default video scaling mode
    * is VIDEO_SCALING_MODE_SCALE_TO_FIT.
@@ -146,6 +170,32 @@ public:
    * @param mode target video scaling mode.
    */
   virtual void setVideoScalingMode(int mode) = 0;
+
+  /**
+   * Sets how the video is fitted into the output surface.
+   *
+   * <p>The default implementation maps this to the platform scaling mode, so a player that only
+   * implements {@link #setVideoScalingMode(int)} keeps working.
+   */
+  virtual void setVideoScaleMode(const VideoScaleMode mode) {
+    switch (mode) {
+      case VideoScaleMode::Fill:
+        setVideoScalingMode(2);
+        break;
+      case VideoScaleMode::Stretch:
+        setVideoScalingMode(3);
+        break;
+      case VideoScaleMode::Fit:
+      default:
+        setVideoScalingMode(1);
+        break;
+    }
+  }
+
+  /** Returns the scaling mode requested with {@link #setVideoScaleMode}. */
+  [[nodiscard]] virtual VideoScaleMode getVideoScaleMode() const {
+    return VideoScaleMode::Fit;
+  }
 
   /**
    * Sets the receiver of the cues that the player renders, or clears it with null.
@@ -169,6 +219,34 @@ public:
 
   /** Sets the factory that turns a media item into a media source. */
   virtual void setMediaSourceFactory(const std::shared_ptr<MediaSourceFactory>& factory) {}
+
+  /**
+   * Returns the tracks of the current media item and the current selection.
+   *
+   * <p>An empty value is returned before the first period is prepared. The default implementation
+   * returns an empty snapshot for players that do not expose tracks.
+   */
+  [[nodiscard]] virtual Tracks getCurrentTracks() const {
+    return {};
+  }
+
+  /**
+   * Selects one track explicitly.
+   *
+   * @param rendererIndex the renderer index from {@link TrackInfo#rendererIndex}.
+   * @param groupIndex the group index inside that renderer.
+   * @param trackIndex the track index inside that group.
+   */
+  virtual void selectTrack(int rendererIndex, int groupIndex, int trackIndex) {
+    static_cast<void>(rendererIndex);
+    static_cast<void>(groupIndex);
+    static_cast<void>(trackIndex);
+  }
+
+  /** Returns a renderer to automatic track selection. */
+  virtual void clearTrackSelection(int rendererIndex) {
+    static_cast<void>(rendererIndex);
+  }
 
   [[nodiscard]] virtual std::shared_ptr<TextOutput> getTextOutput() const { return nullptr; }
 
@@ -331,6 +409,39 @@ public:
    * Returns the currently active playback parameters.
    */
   [[nodiscard]] virtual const Parameters& getPlaybackParameters() const = 0;
+
+  /** A half-open interval of media that is buffered and can be seeked into without loading. */
+  struct BufferedRange {
+    int64_t startUs = 0;
+    int64_t endUs = 0;
+  };
+
+  /**
+   * Returns how far the player has buffered from the current position.
+   *
+   * <p>This is the end of the contiguous buffered range that contains the current position, or the
+   * current position when nothing is buffered ahead. A buffered seek bar uses it together with
+   * {@link #getCurrentPositionUs}.
+   */
+  [[nodiscard]] virtual int64_t getBufferedPositionUs() const {
+    return getCurrentPositionUs();
+  }
+
+  /**
+   * Returns the buffered intervals of the current media item.
+   *
+   * <p>The default implementation reports the single range between the current and buffered
+   * positions, which is what a progressive source has. A player that knows several ranges (for
+   * example after a seek into a cached part) overrides it.
+   */
+  [[nodiscard]] virtual std::vector<BufferedRange> getBufferedRanges() const {
+    const auto positionUs = getCurrentPositionUs();
+    const auto bufferedPositionUs = getBufferedPositionUs();
+    if (bufferedPositionUs > positionUs) {
+      return { BufferedRange { positionUs, bufferedPositionUs } };
+    }
+    return {};
+  }
 
   /**
    * Gets the current playback position.

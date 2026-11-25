@@ -40,6 +40,9 @@
 #include "TraceUtil.h"
 
 #include <coral/selection/DefaultTrackSelector.h>
+#include <coral/selection/MappingTrackSelector.h>
+#include <coral/selection/SelectionCapabilities.h>
+#include <coral/selection/SelectionOverride.h>
 #include <core/time/SystemClock.h>
 #include <coral/upstream/DefaultBandwidthMeter.h>
 
@@ -456,7 +459,21 @@ void AvLivePlayer::setOutputSurface(const std::shared_ptr<VideoSurface>& surface
 }
 
 void AvLivePlayer::setVideoScalingMode(int mode) {
+  if (mode == 2) {
+    videoScaleMode.store(VideoScaleMode::Fill, std::memory_order_relaxed);
+  } else if (mode == 3) {
+    videoScaleMode.store(VideoScaleMode::Stretch, std::memory_order_relaxed);
+  } else {
+    videoScaleMode.store(VideoScaleMode::Fit, std::memory_order_relaxed);
+  }
   msgHandler->sendMessage(Message::obtain(msgHandler, MSG_SET_VIDEO_SCALE_MODE, WrapMessageData(mode)));
+}
+
+void AvLivePlayer::setVideoScaleMode(const VideoScaleMode mode) {
+  videoScaleMode.store(mode, std::memory_order_relaxed);
+  const int platformMode = mode == VideoScaleMode::Fill ? 2 : (mode == VideoScaleMode::Stretch ? 3 : 1);
+  msgHandler->sendMessage(Message::obtain(msgHandler, MSG_SET_VIDEO_SCALE_MODE,
+    WrapMessageData(platformMode)));
 }
 
 void AvLivePlayer::setMediaItem(const std::shared_ptr<MediaItem>& mediaItem) {
@@ -909,6 +926,14 @@ bool AvLivePlayer::handleMessage(Message* msg) {
     }
     case MSG_TRACK_SELECTION_INVALIDATED: {
       reselectTracksInternal();
+      break;
+    }
+    case MSG_SELECT_TRACK: {
+      selectTrackInternal(UseMessageData<TrackSelectionRequest>(msg->msgData));
+      break;
+    }
+    case MSG_CLEAR_TRACK_SELECTION: {
+      clearTrackSelectionInternal(UseMessageData<int>(msg->msgData));
       break;
     }
     case MSG_SET_PREFERRED_TEXT_LANGUAGE: {
@@ -1478,9 +1503,10 @@ void AvLivePlayer::applyVideoEffectSurface(const std::shared_ptr<VideoSurface>& 
 void AvLivePlayer::setVideoScalingModeInternal(const Message* msg) {
   if (videoEffectGraph != nullptr) {
     const int mode = UseMessageData<int>(msg->msgData);
-    // Android's SCALE_TO_FIT_WITH_CROPPING is 2; everything else is the fit mode. The constants
-    // live in the platform MediaCodec headers, which the playback core does not include.
-    const EffectScaleMode scaleMode = mode == 2 ? EffectScaleMode::Crop : EffectScaleMode::Fit;
+    // Android's SCALE_TO_FIT_WITH_CROPPING is 2; 3 is this player's stretch extension. The
+    // platform constants live in the MediaCodec headers, which the playback core does not include.
+    const EffectScaleMode scaleMode = mode == 2 ? EffectScaleMode::Crop
+      : (mode == 3 ? EffectScaleMode::Stretch : EffectScaleMode::Fit);
     if (videoEffectGraph->setScaleMode(scaleMode) != EffectResult::Success) {
       MINILOG_WARN("could not set the effect layout mode");
     }
@@ -1491,6 +1517,94 @@ void AvLivePlayer::setVideoScalingModeInternal(const Message* msg) {
       renderer->handleMessage(Renderer::MSG_SET_SCALING_MODE, msg);
     }
   }
+}
+
+Tracks AvLivePlayer::getCurrentTracks() const {
+  return buildCurrentTracks();
+}
+
+void AvLivePlayer::selectTrack(const int rendererIndex, const int groupIndex, const int trackIndex) {
+  TrackSelectionRequest request;
+  request.rendererIndex = rendererIndex;
+  request.groupIndex = groupIndex;
+  request.trackIndex = trackIndex;
+  msgHandler->sendMessage(Message::obtain(msgHandler, MSG_SELECT_TRACK, WrapMessageData(request)));
+}
+
+void AvLivePlayer::clearTrackSelection(const int rendererIndex) {
+  msgHandler->sendMessage(Message::obtain(msgHandler, MSG_CLEAR_TRACK_SELECTION,
+    WrapMessageData(rendererIndex)));
+}
+
+void AvLivePlayer::selectTrackInternal(const TrackSelectionRequest& request) {
+  const auto selector = std::dynamic_pointer_cast<DefaultTrackSelector>(trackSelector);
+  if (selector == nullptr || request.rendererIndex < 0 ||
+      request.rendererIndex >= static_cast<int>(renderers.size())) {
+    return;
+  }
+  selector->setSelectionOverride(request.rendererIndex,
+    SelectionOverride(request.groupIndex, request.trackIndex));
+}
+
+void AvLivePlayer::clearTrackSelectionInternal(const int rendererIndex) {
+  const auto selector = std::dynamic_pointer_cast<DefaultTrackSelector>(trackSelector);
+  if (selector == nullptr || rendererIndex < 0 ||
+      rendererIndex >= static_cast<int>(renderers.size())) {
+    return;
+  }
+  selector->setSelectionOverride(rendererIndex, std::nullopt);
+}
+
+Tracks AvLivePlayer::buildCurrentTracks() const {
+  Tracks tracks;
+  const auto selector = std::dynamic_pointer_cast<MappingTrackSelector>(trackSelector);
+  if (selector == nullptr) {
+    return tracks;
+  }
+  const auto mapped = selector->getCurrentMappedTrackInfo();
+  if (mapped == nullptr) {
+    return tracks;
+  }
+  const auto result = playbackInfo.trackSelectorResult;
+  for (int rendererIndex = 0; rendererIndex < mapped->getRendererCount(); ++rendererIndex) {
+    const auto groups = mapped->getTrackGroups(rendererIndex);
+    if (groups == nullptr) {
+      continue;
+    }
+    const auto selection = result != nullptr ? result->getSelection(rendererIndex) : nullptr;
+    const auto type = trackTypeOf(mapped->getRendererType(rendererIndex));
+    for (int groupIndex = 0; groupIndex < groups->length(); ++groupIndex) {
+      const auto group = groups->get(groupIndex);
+      if (group == nullptr) {
+        continue;
+      }
+      TrackGroupInfo groupInfo;
+      groupInfo.type = type;
+      groupInfo.rendererIndex = rendererIndex;
+      groupInfo.groupIndex = groupIndex;
+      for (int trackIndex = 0; trackIndex < group->length(); ++trackIndex) {
+        Track track;
+        track.type = type;
+        track.rendererIndex = rendererIndex;
+        track.groupIndex = groupIndex;
+        track.trackIndex = trackIndex;
+        track.format = group->getFormat(trackIndex);
+        track.supported = mapped->getTrackSupport(rendererIndex, groupIndex, trackIndex) ==
+                          SelectionCapabilities::FORMAT_HANDLED;
+        track.selected = selection != nullptr && selection->getTrackGroup() == group &&
+                         selection->indexOf(trackIndex) != Definitions::kIndexUnset;
+        groupInfo.selected = groupInfo.selected || track.selected;
+        groupInfo.tracks.push_back(std::move(track));
+      }
+      tracks.groups.push_back(std::move(groupInfo));
+    }
+  }
+  return tracks;
+}
+
+void AvLivePlayer::dispatchTracksChanged() {
+  const Tracks tracks = buildCurrentTracks();
+  dispatchPlayerEvent([tracks](EventListener& listener) { listener.onTracksChanged(tracks); });
 }
 
 void AvLivePlayer::setMediaItemInternal(const std::shared_ptr<MediaSource>& mediaSource) {
@@ -1985,6 +2099,7 @@ void AvLivePlayer::handlePeriodPrepared(const std::shared_ptr<MediaPeriod>& medi
         playbackInfo.requestedContentPositionUs);
   }
   maybeContinueLoading();
+  dispatchTracksChanged();
 }
 
 void AvLivePlayer::handleContinueLoadingRequested(const std::shared_ptr<MediaPeriod>& mediaPeriod) {
@@ -2327,6 +2442,7 @@ void AvLivePlayer::reselectTracksInternal() {
     updatePlaybackPositions();
     msgHandler->sendEmptyMessage(MSG_DO_SOME_WORK);
   }
+  dispatchTracksChanged();
 }
 
 void AvLivePlayer::updateTrackSelectionPlaybackSpeed(const float playbackSpeed) const {
@@ -2387,7 +2503,7 @@ void AvLivePlayer::resetInternal(const bool resetRenderers,
     shouldUseRequestedContentPosition(playbackInfo, period, window)
       ? playbackInfo.requestedContentPositionUs
       : playbackInfo.positionUs;
-  auto resetTrackInfo = false;
+  auto resetTrack = false;
   if (resetPosition) {
     pendingInitialSeekPosition = std::nullopt;
     auto [periodUid, positionUs] = getPlaceholderFirstMediaPeriodPosition(playbackInfo.timeline);
@@ -2395,7 +2511,7 @@ void AvLivePlayer::resetInternal(const bool resetRenderers,
     startPositionUs = positionUs;
     requestedContentPositionUs = Definitions::kTimeUnset;
     if (mediaPeriodId != playbackInfo.periodId) {
-      resetTrackInfo = true;
+      resetTrack = true;
     }
   }
 
@@ -2408,8 +2524,8 @@ void AvLivePlayer::resetInternal(const bool resetRenderers,
     playbackInfo.playbackState,
     resetError ? std::string() : playbackInfo.playbackErrorMessage,
     false,
-    resetTrackInfo ? std::shared_ptr<TrackGroupArray>() : playbackInfo.trackGroups,
-    resetTrackInfo ? emptyTrackSelectorResult : playbackInfo.trackSelectorResult,
+    resetTrack ? std::shared_ptr<TrackGroupArray>() : playbackInfo.trackGroups,
+    resetTrack ? emptyTrackSelectorResult : playbackInfo.trackSelectorResult,
     mediaPeriodId,
     playbackInfo.playWhenReady,
     playbackInfo.parameters,

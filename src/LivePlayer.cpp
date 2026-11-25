@@ -149,8 +149,28 @@ void LivePlayer::setVideoScalingMode(int mode) {
   mImpl->setVideoScalingMode(mode);
 }
 
+void LivePlayer::setVideoScaleMode(const VideoScaleMode mode) {
+  mImpl->setVideoScaleMode(mode);
+}
+
+LivePlayer::VideoScaleMode LivePlayer::getVideoScaleMode() const {
+  return mImpl->getVideoScaleMode();
+}
+
 void LivePlayer::setTextOutput(const std::shared_ptr<TextOutput>& output) {
   mImpl->setTextOutput(output);
+}
+
+Tracks LivePlayer::getCurrentTracks() const {
+  return mImpl->getCurrentTracks();
+}
+
+void LivePlayer::selectTrack(int rendererIndex, int groupIndex, int trackIndex) {
+  mImpl->selectTrack(rendererIndex, groupIndex, trackIndex);
+}
+
+void LivePlayer::clearTrackSelection(int rendererIndex) {
+  mImpl->clearTrackSelection(rendererIndex);
 }
 
 void LivePlayer::setPreferredTextLanguage(const std::string& language, const bool selectUndetermined) {
@@ -262,6 +282,14 @@ const Parameters& LivePlayer::getPlaybackParameters() const {
 
 int64_t LivePlayer::getCurrentPositionUs() const {
   return mImpl->getCurrentPositionUs();
+}
+
+int64_t LivePlayer::getBufferedPositionUs() const {
+  return mImpl->getBufferedPositionUs();
+}
+
+std::vector<Player::BufferedRange> LivePlayer::getBufferedRanges() const {
+  return mImpl->getBufferedRanges();
 }
 
 int64_t LivePlayer::getDurationUs() const {
