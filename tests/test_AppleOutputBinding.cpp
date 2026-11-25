@@ -801,6 +801,60 @@ TEST(AppleLivePlayerEffectTest, SwitchesBetweenMultipleAudioRenderers) {
   player->release();
 }
 
+TEST(AppleLivePlayerEffectTest, ReportsAndSelectsSideLoadedSubtitleTracks) {
+  const std::string video = std::string(CORAL_ASSETS_DIR) + "/video/video720p_5s.mp4";
+  const std::string english = std::string(CORAL_ASSETS_DIR) + "/subtitle/sample.srt";
+  const std::string chinese = std::string(CORAL_ASSETS_DIR) + "/subtitle/sample_zho.srt";
+  if (!std::filesystem::exists(english) || !std::filesystem::exists(chinese)) {
+    GTEST_SKIP() << "the side-loaded subtitle fixtures are missing";
+  }
+  std::vector<MediaItem::SubtitleConfiguration> subtitles;
+  subtitles.emplace_back(english, "application/x-subrip", "en", "English", "en-srt");
+  subtitles.emplace_back(chinese, "application/x-subrip", "zh", "Chinese", "zh-srt");
+  auto item = MediaItem::fromUrl(video, std::move(subtitles));
+  ASSERT_NE(item, nullptr);
+  auto player = LivePlayer::create(item, LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] {
+    return player->getPlaybackState() == coral::Player::State::STATE_READY ||
+           !player->getPlaybackErrorMessage().empty();
+  }, 10s)) << player->getPlaybackErrorMessage();
+  ASSERT_TRUE(player->getPlaybackErrorMessage().empty());
+
+  auto textTracks = [&]() {
+    std::vector<coral::Track> tracks;
+    for (const auto& group : player->getCurrentTracks().groups) {
+      for (const auto& track : group.tracks) {
+        if (track.type == coral::TrackType::Text) {
+          tracks.push_back(track);
+        }
+      }
+    }
+    return tracks;
+  };
+  const auto tracks = textTracks();
+  ASSERT_GE(tracks.size(), 2u) << "both side-loaded subtitle tracks should be advertised";
+  const auto target = std::find_if(tracks.begin(), tracks.end(),
+      [&](const coral::Track& track) { return !track.selected; });
+  ASSERT_NE(target, tracks.end());
+  const int changesBefore = probe->tracksChangedCount();
+  player->selectTrack(target->rendererIndex, target->groupIndex, target->trackIndex);
+  EXPECT_TRUE(waitFor([&] {
+    for (const auto& track : textTracks()) {
+      if (track.selected && track.rendererIndex == target->rendererIndex &&
+          track.groupIndex == target->groupIndex && track.trackIndex == target->trackIndex) {
+        return true;
+      }
+    }
+    return false;
+  }, 5s)) << "the selected subtitle track is not the target";
+  EXPECT_GT(probe->tracksChangedCount(), changesBefore);
+  player->release();
+}
+
 // ==================================================================================================
 // The player drives the IOSurface output
 // ==================================================================================================
