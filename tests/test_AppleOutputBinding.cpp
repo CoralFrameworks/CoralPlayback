@@ -1066,6 +1066,64 @@ TEST(AppleLivePlayerEffectTest, CompositesPgsWindowsAndObjectsAtTheirPositions) 
   player->release();
 }
 
+TEST(AppleLivePlayerEffectTest, CompositesOverlappingPgsWindowsInPcsOrder) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/pgs_overlap_5s.mkv";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the overlapping PGS fixture is missing: " << path;
+  }
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  const auto surface = AppleIOSurface::create(320, 180, EffectPixelFormat::BGRA8);
+  ASSERT_NE(surface, nullptr);
+  const auto input = AppleVideoInput::createFrameInput(320, 180, 4);
+  ASSERT_NE(input, nullptr);
+  VideoEffectInput effectInput;
+  effectInput.inputNode = input;
+  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
+  player->setOutputSurface(surface);
+  player->setPreferredTextLanguage("eng");
+  const auto engine = player->getEffectEngine();
+  ASSERT_NE(engine, nullptr);
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] { return player->getPlaybackState() == coral::Player::State::STATE_READY; },
+                      10s)) << player->getPlaybackErrorMessage();
+  player->play();
+  ASSERT_TRUE(waitFor([&] { return probe->bitmapCueSeen(); }, 10s))
+      << "the overlapping PGS cue never reached the player events";
+  ASSERT_TRUE(waitFor([&] { return engine->isRunning() && engine->stats().frameCount > 0; }, 15s))
+      << engine->diagnostics();
+
+  // The cue covers the top-left 240x90 pixels. The red object's left column stays visible; the
+  // blue object, listed second in the PCS, covers the overlap and the right side.
+  bool leftRed = false;
+  bool overlapBlue = false;
+  bool rightBlue = false;
+  std::vector<uint8_t> left;
+  std::vector<uint8_t> overlap;
+  std::vector<uint8_t> right;
+  for (int attempt = 0; attempt < 100 && (!leftRed || !overlapBlue || !rightBlue); ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    left = pixelAt(surface->iosurface(), 40, 45);
+    overlap = pixelAt(surface->iosurface(), 120, 45);
+    right = pixelAt(surface->iosurface(), 200, 45);
+    leftRed = left[2] >= 200 && left[0] <= 130;
+    overlapBlue = overlap[0] >= 200 && overlap[2] <= 130;
+    rightBlue = right[0] >= 200 && right[2] <= 130;
+    if (!leftRed || !overlapBlue || !rightBlue) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(leftRed) << "left window; BGRA=" << static_cast<int>(left[0]) << ","
+                       << static_cast<int>(left[1]) << "," << static_cast<int>(left[2]);
+  EXPECT_TRUE(overlapBlue) << "overlap; BGRA=" << static_cast<int>(overlap[0]) << ","
+                           << static_cast<int>(overlap[1]) << "," << static_cast<int>(overlap[2]);
+  EXPECT_TRUE(rightBlue) << "right window; BGRA=" << static_cast<int>(right[0]) << ","
+                         << static_cast<int>(right[1]) << "," << static_cast<int>(right[2]);
+  player->release();
+}
+
 TEST(AppleLivePlayerEffectTest, PlaysHdr10AndReportsItsColorInfo) {
   const char* const asset = std::getenv("CORAL_HDR_ASSET");
   if (asset == nullptr || !std::filesystem::exists(asset)) {
