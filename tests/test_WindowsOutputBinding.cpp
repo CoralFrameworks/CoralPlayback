@@ -19,6 +19,7 @@
 #include <coral/playback/win32/Win32TextureSurface.h>
 #include <coral/playback/win32/Win32WindowSurface.h>
 #include <coral/playback/win32/WindowsTextureOutputNodeFactory.h>
+#include <coral/playback/win32/WindowsThumbnailProvider.h>
 
 #include "platform/win32/WindowsVideoOutputNodeFactory.h"
 
@@ -29,6 +30,8 @@
 
 #include <chrono>
 #include <functional>
+#include <filesystem>
+#include <future>
 #include <thread>
 
 namespace coral {
@@ -201,6 +204,29 @@ TEST(WindowsTexturePlayerEffectTest, RendersIntoTheSharedTextureRing) {
   player->release();
   surface->release();
   device->Release();
+}
+
+TEST(WindowsThumbnailProviderTest, DecodesAFrameAtTheRequestedTime) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/video720p_5s.mp4";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the video fixture is missing: " << path;
+  }
+  auto provider = WindowsThumbnailProvider::create(path, 320, 180);
+  if (provider == nullptr) {
+    GTEST_SKIP() << "Media Foundation is unavailable on this host";
+  }
+  auto promise = std::make_shared<std::promise<Thumbnail>>();
+  auto future = promise->get_future();
+  provider->requestThumbnail(1'000'000, [promise](Thumbnail thumbnail) {
+    promise->set_value(std::move(thumbnail));
+  });
+  ASSERT_EQ(future.wait_for(10s), std::future_status::ready);
+  const auto thumbnail = future.get();
+  ASSERT_NE(thumbnail.frame, nullptr);
+  EXPECT_EQ(thumbnail.positionUs, 1'000'000);
+  EXPECT_GT(thumbnail.frame->width(), 0);
+  EXPECT_GT(thumbnail.frame->height(), 0);
+  provider->cancel();
 }
 
 } // namespace

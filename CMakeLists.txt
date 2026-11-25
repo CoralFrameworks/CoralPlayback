@@ -395,6 +395,7 @@ if (WIN32 AND NOT ANDROID)
   list(APPEND PUBLIC_HDRS
       coral/playback/win32/Win32TextureSurface.h
       coral/playback/win32/Win32VideoFrameSource.h
+      coral/playback/win32/WindowsThumbnailProvider.h
       coral/playback/win32/WindowsTextureOutputNodeFactory.h
   )
 endif ()
@@ -505,6 +506,7 @@ if (WIN32 AND NOT ANDROID)
   list(APPEND SRCS
       src/platform/win32/Win32TextureSurface.cpp
       src/platform/win32/Win32VideoFrameSource.cpp
+      src/platform/win32/WindowsThumbnailProvider.cpp
       src/platform/win32/Win32WindowSurface.cpp
       src/platform/win32/WindowsTextureOutputNodeFactory.cpp
       src/platform/win32/WindowsVideoOutputNodeFactory.cpp
@@ -566,6 +568,7 @@ target_link_libraries(${CORAL_PLAYBACK_TARGET} PRIVATE yuv)
 
 if (WIN32 AND NOT ANDROID)
   target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC effect_win)
+  target_link_libraries(${CORAL_PLAYBACK_TARGET} PRIVATE mfplat mfreadwrite mfuuid ole32)
 elseif (ANDROID)
   target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC effect_android)
 elseif (APPLE)
