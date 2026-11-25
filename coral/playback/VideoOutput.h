@@ -28,10 +28,10 @@ class VideoSurface;
 /**
  * Turns a platform surface handed to LivePlayer into the output node of its effect graph.
  *
- * <p>The player itself does not know whether a surface is an Android `ANativeWindow` or a Win32
- * `HWND`. A platform bridge implements this interface, creates the matching output node, and
- * installs it on the player. That keeps the platform types out of `coral/playback` and lets the
- * same `setOutputSurface` entry point work on every platform.
+ * <p>The player itself does not know whether a surface is an Android `ANativeWindow`, a Win32
+ * `HWND` or an Apple `IOSurface`. A platform bridge implements this interface, creates the matching
+ * output node, and installs it on the player. That keeps the platform types out of `coral/playback`
+ * and lets the same `setOutputSurface` entry point work on every platform.
  */
 class VideoOutputNodeFactory {
 public:

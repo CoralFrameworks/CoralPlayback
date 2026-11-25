@@ -5,33 +5,43 @@ engine and presents the composed frames in a Cocoa window:
 
 ```
 ProgressiveMediaSource -> DecodeVideoRenderer -> VideoFrameInputNode
-    -> VideoLayoutPass -> SubtitleOverlayNode -> ReadbackOutputNode -> NSWindow
+    -> VideoLayoutPass -> SubtitleOverlayNode -> AppleIOSurfaceOutputNode
+    -> IOSurface -> layer-backed NSView
 ```
 
-The player owns the media source, the decoder and the effect graph. The demo implements the two public
-seams a host supplies:
+The player owns the media source, the decoder and the effect graph. The demo supplies the three
+public pieces a macOS/iOS host supplies:
 
-- a `VideoOutputNodeFactory` that returns the output node the graph presents into;
-- a `VideoSurface` that tells the player an output target exists.
+- a `VideoSurface` over an output `IOSurface` (`AppleIOSurface`), which tells the player an output
+  target exists and how large it is;
+- a `VideoOutputNodeFactory` (`AppleVideoOutputNodeFactory`) that turns that surface into the graph's
+  `AppleIOSurfaceOutputNode`;
+- an input node (`AppleVideoInput::createFrameInput`) for the decoded frames.
 
-Here both are CPU-backed: the output node is a `ReadbackOutputNode`, and the window copies each
-completed frame into an `NSImage`. A production player on macOS would instead return a swap-chain or
-Metal texture output and draw the final texture directly, avoiding the readback; the rest of the
-pipeline is the same.
+The decoded frame enters through the CPU fallback: CoralMedia's VideoToolbox decoder converts its NV12
+`CVPixelBuffer` into I420 planes, `VideoFrameInputNode` copies them into its queue and uploads them on
+the effect render thread. The graph composes the frame and `AppleIOSurfaceOutputNode` copies the final
+image into the output surface on the GPU. The window is a layer-backed `NSView`: its `CALayer.contents`
+is the surface, so presenting a frame costs one property assignment and no pixel copy. A production
+host can hand the same surface to a Metal compositor or a video encoder instead.
+
+The zero-copy input (`AppleVideoInput::createIOSurfaceInput` over `AppleIOSurfaceInputNode`) is part of
+the library but is not wired into `DecodeVideoRenderer` yet; the demo documents the CPU fallback that
+works today.
 
 ## What it verifies
 
 | Check | What it proves |
 | --- | --- |
 | the player reaches `STATE_READY` and starts | the progressive source, the extractor and the decoder agree on the file |
-| frames arrive at the output node | the effect graph, the layout pass and the readback are connected |
-| the window shows a new frame each time | the frame's sequence advanced, so the window is not repeating the first image |
+| the effect engine commits frames | the graph, the layout pass and the IOSurface output are connected |
+| the window shows a new frame each time | the layer's contents was updated from a new effect frame, not the first one repeated |
 | `PLAYER_STATE_ENDED` / `--frames` reaches the exit | playback advanced through the media rather than stalling |
-| `--output` writes non-empty PNGs | the frame contains pixels and the graphics encoder received them |
+| `--output` writes non-empty PNGs | the IOSurface holds the composed picture and the graphics encoder received it |
 
-`--output <dir>` is the headless form: it does not open a window, waits for the requested number of
-frames through `ReadbackOutputNode::waitForFrame`, and writes `frame_00001.png` per frame. A run that
-produces no frame exits non-zero.
+`--output <dir>` is the headless form: it does not open a window, waits for each sampled presentation
+position, calls `EffectEngine::flushAndWait()`, reads the output IOSurface back and writes
+`frame_00001.png`. A run that produces no frame exits non-zero.
 
 ## Running
 
@@ -44,9 +54,9 @@ compiled in as `CORAL_ASSETS_DIR`; pass a file to play another one.
 
 | Option | Meaning |
 | --- | --- |
-| `--size WxH` | render size of the effect graph; default `1280x720` |
-| `--frames N` | stop after N displayed frames; default is to play to the end |
-| `--output DIR` | write PNG frames into `DIR` and do not open a window |
+| `--size WxH` | size of the output IOSurface; default is the video's own size |
+| `--frames N` | stop after N presented effect frames; default is to play to the end |
+| `--output DIR` | write PNGs read from the output IOSurface into `DIR` and do not open a window |
 | `--audio` | play the sound track (the default in a window; `--output` needs it explicitly) |
 | `--no-audio` | build no audio renderer, so no output device is needed |
 | `--mute` | set the player volume to zero |
@@ -63,7 +73,7 @@ As part of the framework, a top-level configure builds it with the repository:
 ./scripts/bootstrap.sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build-demo/video_player_demo assets/video/video720p_5s.mp4
+./build/examples/video_player_demo assets/video/video720p_5s.mp4
 ```
 
 On its own, which is what an IDE opens when working on the demo:

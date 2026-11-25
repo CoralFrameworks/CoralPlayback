@@ -84,17 +84,17 @@ public:
    * `setOutputSurface`; the factory turns the platform surface into an output node. Passing null
    * keeps the graph headless (tests/readback).
    */
-  void enableVideoEffectPipeline(
-      const std::shared_ptr<VideoOutputNodeFactory>& factory = nullptr);
+  void enableVideoEffectPipeline(const std::shared_ptr<VideoOutputNodeFactory>& factory = nullptr);
 
   /**
    * Enables the pipeline with a platform input node and the decoder surface that feeds it.
    *
-   * <p>This is the Android SurfaceTexture zero-copy entry point: the application creates the
-   * input node and a `VideoSurface` over the decoder's Java Surface, then hands both here.
+   * <p>This is the zero-copy entry point. Android passes a `SurfaceTexture` input node and a
+   * `VideoSurface` over the decoder's Java Surface; macOS/iOS pass an `AppleIOSurfaceInputNode` over
+   * the decoder's `CVPixelBuffer` surface. A host that keeps the CPU fallback passes null for
+   * @p decoderSurface, or uses the factory-only overload above.
    */
-  void enableVideoEffectPipeline(
-      const std::shared_ptr<VideoOutputNodeFactory>& factory,
+  void enableVideoEffectPipeline(const std::shared_ptr<VideoOutputNodeFactory>& factory,
       const std::shared_ptr<EffectInputNode>& input,
       const std::shared_ptr<VideoSurface>& decoderSurface,
       void* sharedContext = nullptr);
@@ -114,8 +114,9 @@ public:
   void clearLottieOverlays();
 
   /**
-   * Sets the surface to be used as the sink for the video portion of the media. Only available for
-   * Android. The platform surface is translated by a VideoOutputNodeFactory.
+   * Sets the surface to be used as the sink for the video portion of the media. The platform
+   * surface is translated by a `VideoOutputNodeFactory`; an Android window, a Win32 `HWND` and an
+   * Apple `IOSurface` all arrive here.
    *
    * @param surface the output surface.
    */

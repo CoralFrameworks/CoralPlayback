@@ -384,6 +384,14 @@ if (ANDROID)
   )
 endif ()
 
+if (APPLE)
+  list(APPEND PUBLIC_HDRS
+      coral/playback/apple/AppleIOSurface.h
+      coral/playback/apple/AppleVideoInput.h
+      coral/playback/apple/AppleVideoOutputNodeFactory.h
+  )
+endif ()
+
 set(SRCS
     src/details/AvLivePlayer.cpp
     src/details/AvLivePlayer.h
@@ -487,6 +495,14 @@ if (ANDROID)
   )
 endif ()
 
+if (APPLE)
+  list(APPEND SRCS
+      src/platform/apple/AppleIOSurface.mm
+      src/platform/apple/AppleVideoInput.mm
+      src/platform/apple/AppleVideoOutputNodeFactory.mm
+  )
+endif ()
+
 # ==================================================================================================
 # Includes and target definition
 # ==================================================================================================
@@ -520,6 +536,14 @@ if (WIN32 AND NOT ANDROID)
   target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC effect_win)
 elseif (ANDROID)
   target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC effect_android)
+elseif (APPLE)
+  # The Apple bridge builds its output from `AppleIOSurfaceOutputNode` and its zero-copy input from
+  # `AppleIOSurfaceInputNode`; both live in CoralGraphics' `effect_apple` target.
+  target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC effect_apple)
+  target_link_libraries(${CORAL_PLAYBACK_TARGET} PRIVATE
+      "-framework CoreFoundation"
+      "-framework CoreVideo"
+      "-framework IOSurface")
 endif ()
 
 # ==================================================================================================

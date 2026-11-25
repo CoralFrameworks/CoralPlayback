@@ -17,23 +17,26 @@
 /**
  * @file video_player_demo.mm
  *
- * The macOS playback demo: decode a video with CoralPlayback, run the frames through the effect graph
- * and display them in a Cocoa window.
+ * The macOS playback demo: decode a video with CoralPlayback, run its frames through the effect graph
+ * and present the composed result through an IOSurface.
  *
  * ## The pipeline
  *
  * ```
  * ProgressiveMediaSource -> DecodeVideoRenderer -> VideoFrameInputNode
- *     -> VideoLayoutPass -> SubtitleOverlayNode -> ReadbackOutputNode -> NSWindow
+ *     -> VideoLayoutPass -> SubtitleOverlayNode -> AppleIOSurfaceOutputNode -> IOSurface -> CALayer
  * ```
  *
- * The player owns everything up to the output node. A `VideoOutputNodeFactory` is the public seam
- * between the player and a platform window: the player hands it a `VideoSurface` and the factory
- * returns the `EffectOutputNode` that receives the composed frames. This demo supplies a CPU-backed
- * factory that returns a `ReadbackOutputNode`, then copies each completed frame into an `NSImage`.
- * That keeps the demo to the public playback and effect APIs, with no private header and no GPU
- * context sharing; a production player would instead return a swap-chain output node and sample the
- * final texture directly.
+ * The decoded frame reaches the graph through the CPU fallback: `DecodeVideoRenderer` converts the
+ * decoder's NV12 buffer into I420 planes, `VideoFrameInputNode` copies them into its queue and uploads
+ * them to the GPU on the render thread. The graph composes the frame, and `AppleVideoOutputNodeFactory`
+ * turns the application's `AppleIOSurface` into an `AppleIOSurfaceOutputNode`, which copies the final
+ * image into that surface on the GPU with no CPU round trip.
+ *
+ * The window is a layer-backed `NSView` whose `CALayer.contents` is the surface. Re-assigning the
+ * surface on every new effect frame is what makes Core Animation re-composite it; the pixels never
+ * leave the GPU. That is the difference from the previous version of this demo, which used a
+ * `ReadbackOutputNode` and copied every frame back to the CPU to build an `NSImage`.
  *
  * The windowed demo plays the sound track by default through CoralAudio; `--no-audio` runs on the
  * video and the standalone clock only, which is what a machine without an output device needs.
@@ -46,12 +49,15 @@
  * ```sh
  * ./video_player_demo                                # assets/video/video720p_5s.mp4, windowed
  * ./video_player_demo clip.mp4 --size 1280x720
- * ./video_player_demo clip.mp4 --frames 120          # stop after 120 displayed frames
- * ./video_player_demo clip.mp4 --output frames --frames 30   # headless: write PNGs
+ * ./video_player_demo clip.mp4 --frames 120          # stop after 120 presented effect frames
+ * ./video_player_demo clip.mp4 --output frames --frames 30   # headless: write PNGs from the surface
  * ```
  *
- * `--output <dir>` writes every received frame as `frame_00001.png` and does not open a window, which
- * is the check a build machine can run. The default media path is compiled in as `CORAL_ASSETS_DIR`.
+ * `--output <dir>` reads the output IOSurface back (after waiting for the GPU) and writes
+ * `frame_00001.png` per sampled presentation position, without opening a window. That is the check a
+ * build machine can run: it proves the decoded frames reached the graph, the graph rendered into the
+ * surface, and the surface contains pixels. The default media path is compiled in as
+ * `CORAL_ASSETS_DIR`.
  *
  * Exit codes: 0 = the media played (and at least one frame was produced), 1 = the player or decoder
  * failed, 2 = bad arguments.
@@ -60,19 +66,22 @@
 #include <coral/playback/LivePlayer.h>
 #include <coral/playback/Player.h>
 #include <coral/playback/VideoOutput.h>
+#include <coral/playback/apple/AppleIOSurface.h>
+#include <coral/playback/apple/AppleVideoInput.h>
+#include <coral/playback/apple/AppleVideoOutputNodeFactory.h>
 
-#include <codec/MediaCodec.h>
 #include <codec/MediaMetadataRetriever.h>
 
 #include <effect/EffectEngine.h>
-#include <effect/EffectFrame.h>
-#include <effect/ReadbackOutputNode.h>
 
 #include <graphics/Enums.h>
 #include <graphics/ImageCodec.h>
 #include <graphics/ImageInfo.h>
 
 #import <Cocoa/Cocoa.h>
+#import <QuartzCore/QuartzCore.h>
+
+#include <IOSurface/IOSurface.h>
 
 #include <algorithm>
 #include <atomic>
@@ -112,8 +121,8 @@ void printUsage(const char* program) {
       "usage: %s [media] [options]\n"
       "\n"
       "  media                 file to play; defaults to the asset in assets/video\n"
-      "  --size WxH            render size of the effect graph (default: the video size)\n"
-      "  --frames N            stop after N displayed frames (default: play to the end)\n"
+      "  --size WxH            size of the output IOSurface (default: the video size)\n"
+      "  --frames N            stop after N presented frames (default: play to the end)\n"
       "  --output DIR          write frame_00001.png... into DIR, without a window\n"
       "  --audio               play the audio track (the default in a window)\n"
       "  --no-audio            do not build the audio renderer\n"
@@ -208,8 +217,8 @@ std::optional<Options> parseOptions(const int argc, char** argv) {
 // ==================================================================================================
 
 /**
- * Reads the display size of the first video track, so the graph can be sized to the picture before
- * playback starts.
+ * Reads the display size of the first video track, so the IOSurface and the window can be sized to
+ * the picture before playback starts.
  *
  * The player can only report the size once the decoder has parsed the track, and replacing the output
  * surface while the engine is running is the late-attach path (it pauses and resumes the engine). The
@@ -239,130 +248,83 @@ bool resolveVideoSize(const std::string& path, uint32_t* width, uint32_t* height
 }
 
 // ==================================================================================================
-// Frame capture
+// Surface readback (headless only)
 // ==================================================================================================
 
-/** A frame copied out of the effect graph, in tightly packed RGBA8. */
+/** A frame copied out of the output IOSurface, in tightly packed RGBA8. */
 struct CapturedFrame {
   uint32_t width = 0;
   uint32_t height = 0;
-  uint64_t sequence = 0;
   std::vector<uint8_t> rgba;
 };
 
 /**
- * Receives the frames of the `ReadbackOutputNode` and keeps the newest one for the window.
+ * Copies the IOSurface into tightly packed RGBA8.
  *
- * The callback runs on the effect engine's readback thread. It copies under the lock and returns, so
- * the render side never waits on the display; the window polls `takeAfter()` from its timer.
+ * <p>The window never does this: the surface is handed to Core Animation as it is. Only `--output`
+ * reads it back, and only after `EffectEngine::flushAndWait()` so the GPU copy into the surface is
+ * complete.
  */
-class FrameSink {
-public:
-  /**
-   * @param deliverCallback install the frame callback the window uses. A headless run consumes the
-   *        node with `waitForFrame` instead: with a callback installed the readback node posts every
-   *        frame to the engine's callback queue, and a headless run never drains it.
-   */
-  explicit FrameSink(const bool deliverCallback) : mNode(coral::ReadbackOutputNode::create()) {
-    if (deliverCallback && mNode != nullptr) {
-      mNode->setCallback([this](const coral::EffectFrame& frame, const uint8_t* pixels,
-                                const size_t byteSize) { onFrame(frame, pixels, byteSize); });
+bool readSurface(IOSurfaceRef surface, CapturedFrame* frame) {
+  if (surface == nullptr || frame == nullptr) {
+    return false;
+  }
+  const uint32_t width = static_cast<uint32_t>(IOSurfaceGetWidth(surface));
+  const uint32_t height = static_cast<uint32_t>(IOSurfaceGetHeight(surface));
+  if (width == 0 || height == 0) {
+    return false;
+  }
+  if (IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr) != KERN_SUCCESS) {
+    return false;
+  }
+  const auto* base = static_cast<const uint8_t*>(IOSurfaceGetBaseAddress(surface));
+  const size_t stride = IOSurfaceGetBytesPerRow(surface);
+  const bool isBgra = coral::AppleIOSurface::formatOf(surface) == coral::EffectPixelFormat::BGRA8;
+
+  CapturedFrame captured;
+  captured.width = width;
+  captured.height = height;
+  captured.rgba.resize(static_cast<size_t>(width) * height * 4u);
+  for (uint32_t row = 0; row < height; ++row) {
+    const uint8_t* source = base + static_cast<size_t>(row) * stride;
+    uint8_t* destination = captured.rgba.data() + static_cast<size_t>(row) * width * 4u;
+    for (uint32_t column = 0; column < width; ++column) {
+      const uint8_t* pixel = source + static_cast<size_t>(column) * 4u;
+      if (isBgra) {
+        destination[column * 4 + 0] = pixel[2];
+        destination[column * 4 + 1] = pixel[1];
+        destination[column * 4 + 2] = pixel[0];
+      } else {
+        destination[column * 4 + 0] = pixel[0];
+        destination[column * 4 + 1] = pixel[1];
+        destination[column * 4 + 2] = pixel[2];
+      }
+      destination[column * 4 + 3] = pixel[3];
     }
   }
+  IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, nullptr);
+  *frame = std::move(captured);
+  return true;
+}
 
-  [[nodiscard]] std::shared_ptr<coral::ReadbackOutputNode> node() const { return mNode; }
-  [[nodiscard]] uint32_t width() const { return mWidth.load(std::memory_order_acquire); }
-  [[nodiscard]] uint32_t height() const { return mHeight.load(std::memory_order_acquire); }
-
-  /** Resolves the size the graph renders at; called once the video size is known. */
-  void setSize(const uint32_t width, const uint32_t height) {
-    mWidth.store(width, std::memory_order_release);
-    mHeight.store(height, std::memory_order_release);
+bool writePng(const CapturedFrame& frame, const std::filesystem::path& path) {
+  graphics::DecodedImage image;
+  image.info = graphics::ImageInfo(static_cast<int>(frame.width), static_cast<int>(frame.height),
+                                   graphics::ColorType::kRGBA_8888,
+                                   graphics::AlphaType::kPremultiplied);
+  image.pixels = frame.rgba;
+  const auto encoded = graphics::encodeImage(image, graphics::ImageFormat::PNG);
+  if (!encoded.has_value() || encoded->empty()) {
+    return false;
   }
-  [[nodiscard]] uint64_t frameCount() const { return mFrameCount.load(std::memory_order_acquire); }
-
-  /** @return the newest frame newer than @p previousSequence, or nothing when none arrived. */
-  [[nodiscard]] std::optional<CapturedFrame> takeAfter(const uint64_t previousSequence) const {
-    std::lock_guard<std::mutex> lock(mMutex);
-    if (!mLatest.has_value() || mLatest->sequence <= previousSequence) {
-      return std::nullopt;
-    }
-    return mLatest;
+  std::ofstream file(path, std::ios::binary | std::ios::trunc);
+  if (!file) {
+    return false;
   }
-
-private:
-  void onFrame(const coral::EffectFrame& frame, const uint8_t* pixels, const size_t byteSize) {
-    if (pixels == nullptr || frame.width() == 0 || frame.height() == 0) {
-      return;
-    }
-    const size_t expected = static_cast<size_t>(frame.width()) * frame.height() * 4u;
-    if (byteSize < expected) {
-      return;
-    }
-    CapturedFrame captured;
-    captured.width = frame.width();
-    captured.height = frame.height();
-    captured.sequence = ++mSequence;
-    captured.rgba.assign(pixels, pixels + expected);
-    {
-      std::lock_guard<std::mutex> lock(mMutex);
-      mLatest = std::move(captured);
-    }
-    mFrameCount.fetch_add(1, std::memory_order_acq_rel);
-  }
-
-  std::shared_ptr<coral::ReadbackOutputNode> mNode;
-  std::atomic<uint32_t> mWidth{0};
-  std::atomic<uint32_t> mHeight{0};
-  mutable std::mutex mMutex;
-  std::optional<CapturedFrame> mLatest;
-  std::atomic<uint64_t> mSequence{0};
-  std::atomic<uint64_t> mFrameCount{0};
-};
-
-/**
- * The factory the player asks for an output node.
- *
- * It ignores the platform surface: the demo's sink is a CPU readback, so the surface only carries
- * "the window is ready" and the size the graph should render at. A real window player returns a
- * `WindowsSwapChainOutputNode` or an Android surface node here instead.
- */
-class ReadbackOutputFactory final : public coral::VideoOutputNodeFactory {
-public:
-  explicit ReadbackOutputFactory(std::shared_ptr<FrameSink> sink) : mSink(std::move(sink)) {}
-
-  std::shared_ptr<coral::EffectOutputNode> create(
-      const std::shared_ptr<coral::VideoSurface>& surface) override {
-    if (surface == nullptr || !surface->isValid()) {
-      return nullptr;
-    }
-    return mSink->node();
-  }
-
-  bool querySize(const std::shared_ptr<coral::VideoSurface>& surface, uint32_t* width,
-                 uint32_t* height) override {
-    if (surface == nullptr || !surface->isValid() || width == nullptr || height == nullptr) {
-      return false;
-    }
-    if (mSink->width() == 0 || mSink->height() == 0) {
-      return false;
-    }
-    *width = mSink->width();
-    *height = mSink->height();
-    return true;
-  }
-
-private:
-  std::shared_ptr<FrameSink> mSink;
-};
-
-/** A surface that only says "the output is available"; the pixels never go to the platform decoder. */
-class ReadbackSurface final : public coral::VideoSurface {
-public:
-  [[nodiscard]] void* getInstance() const override { return const_cast<ReadbackSurface*>(this); }
-  [[nodiscard]] bool isValid() const override { return true; }
-  void release() override {}
-};
+  file.write(reinterpret_cast<const char*>(encoded->data()),
+             static_cast<std::streamsize>(encoded->size()));
+  return file.good();
+}
 
 // ==================================================================================================
 // Player session
@@ -406,29 +368,6 @@ public:
   }
 
   static std::unique_ptr<PlayerSession> create(const Options& options) {
-    auto player = coral::LivePlayer::create(
-        options.mediaPath, coral::LivePlayer::Configuration{.audioEnabled = options.audio});
-    if (player == nullptr) {
-      std::fprintf(stderr, "error: could not create a player for '%s'\n", options.mediaPath.c_str());
-      return nullptr;
-    }
-
-    auto session = std::unique_ptr<PlayerSession>(new PlayerSession());
-    session->mSink = std::make_shared<FrameSink>(options.showWindow);
-    session->mListener = std::make_shared<SessionListener>();
-
-    // The pipeline has to be enabled before prepare(), and the surface is what makes the player ask
-    // the factory for an output node.
-    player->enableVideoEffectPipeline(std::make_shared<ReadbackOutputFactory>(session->mSink));
-    if (!player->isVideoEffectPipelineEnabled()) {
-      std::fprintf(stderr, "error: the effect video pipeline could not be enabled\n");
-      return nullptr;
-    }
-    if (options.audio && options.mute) {
-      player->setVolume(coral::Volume{0.0f, 0.0f});
-    }
-    player->addListener(session->mListener);
-
     uint32_t renderWidth = options.renderWidth;
     uint32_t renderHeight = options.renderHeight;
     if (renderWidth == 0 || renderHeight == 0) {
@@ -438,9 +377,48 @@ public:
       }
     }
 
+    // The output surface is the target of the effect graph and the object Core Animation displays.
+    // It exists before the player does, so `setOutputSurface` can attach it before `prepare()` and
+    // the engine is sized to the picture from its first frame.
+    auto surface = coral::AppleIOSurface::create(renderWidth, renderHeight,
+                                                 coral::EffectPixelFormat::BGRA8);
+    if (surface == nullptr) {
+      std::fprintf(stderr, "error: could not create a %ux%u IOSurface\n", renderWidth, renderHeight);
+      return nullptr;
+    }
+
+    auto player = coral::LivePlayer::create(
+        options.mediaPath, coral::LivePlayer::Configuration{.audioEnabled = options.audio});
+    if (player == nullptr) {
+      std::fprintf(stderr, "error: could not create a player for '%s'\n", options.mediaPath.c_str());
+      return nullptr;
+    }
+
+    auto session = std::unique_ptr<PlayerSession>(new PlayerSession());
+    session->mSurface = surface;
+    session->mListener = std::make_shared<SessionListener>();
+
+    // The decoded frames enter through the CPU fallback node: the decoder hands the graph NV12/I420
+    // planes and the node uploads them to the GPU. The output factory turns the IOSurface into the
+    // graph's `AppleIOSurfaceOutputNode`.
+    auto input = coral::AppleVideoInput::createFrameInput(renderWidth, renderHeight, 8);
+    if (input == nullptr) {
+      std::fprintf(stderr, "error: could not create the effect input node\n");
+      return nullptr;
+    }
+    player->enableVideoEffectPipeline(std::make_shared<coral::AppleVideoOutputNodeFactory>(), input,
+                                      nullptr);
+    if (!player->isVideoEffectPipelineEnabled()) {
+      std::fprintf(stderr, "error: the effect video pipeline could not be enabled\n");
+      return nullptr;
+    }
+    if (options.audio && options.mute) {
+      player->setVolume(coral::Volume{0.0f, 0.0f});
+    }
+    player->addListener(session->mListener);
+    player->setOutputSurface(surface);
+
     session->mPlayer = std::move(player);
-    session->mSink->setSize(renderWidth, renderHeight);
-    session->mPlayer->setOutputSurface(std::make_shared<ReadbackSurface>());
     session->mPlayer->prepare();
 
     // Wait for the source to be ready before starting: a player that is told to play while the first
@@ -448,7 +426,7 @@ public:
     const auto readyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (std::chrono::steady_clock::now() < readyDeadline) {
       if (session->mPlayer->getPlaybackState() == coral::Player::State::STATE_READY ||
-          session->listener()->failed()) {
+          session->mListener->failed()) {
         break;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -458,39 +436,24 @@ public:
   }
 
   [[nodiscard]] coral::LivePlayer* player() const { return mPlayer.get(); }
-  [[nodiscard]] const std::shared_ptr<FrameSink>& sink() const { return mSink; }
+  [[nodiscard]] const std::shared_ptr<coral::AppleIOSurface>& surface() const { return mSurface; }
   [[nodiscard]] const std::shared_ptr<SessionListener>& listener() const { return mListener; }
+
+  [[nodiscard]] std::shared_ptr<coral::EffectEngine> engine() const {
+    return mPlayer != nullptr ? mPlayer->getEffectEngine() : nullptr;
+  }
 
 private:
   PlayerSession() = default;
 
   std::unique_ptr<coral::LivePlayer> mPlayer;
-  std::shared_ptr<FrameSink> mSink;
+  std::shared_ptr<coral::AppleIOSurface> mSurface;
   std::shared_ptr<SessionListener> mListener;
 };
 
 // ==================================================================================================
 // PNG output (headless)
 // ==================================================================================================
-
-bool writePng(const CapturedFrame& frame, const std::filesystem::path& path) {
-  graphics::DecodedImage image;
-  image.info = graphics::ImageInfo(static_cast<int>(frame.width), static_cast<int>(frame.height),
-                                   graphics::ColorType::kRGBA_8888,
-                                   graphics::AlphaType::kPremultiplied);
-  image.pixels = frame.rgba;
-  const auto encoded = graphics::encodeImage(image, graphics::ImageFormat::PNG);
-  if (!encoded.has_value() || encoded->empty()) {
-    return false;
-  }
-  std::ofstream file(path, std::ios::binary | std::ios::trunc);
-  if (!file) {
-    return false;
-  }
-  file.write(reinterpret_cast<const char*>(encoded->data()),
-             static_cast<std::streamsize>(encoded->size()));
-  return file.good();
-}
 
 int runHeadless(const Options& options) {
   std::error_code directoryError;
@@ -505,62 +468,67 @@ int runHeadless(const Options& options) {
   if (session == nullptr) {
     return 1;
   }
+  const auto engine = session->engine();
+  if (engine == nullptr) {
+    std::fprintf(stderr, "error: the effect engine is not available\n");
+    return 1;
+  }
 
   const int wanted = options.frames > 0 ? options.frames : 30;
+  // The engine renders continuously, so the same decoded frame can be committed several times. The
+  // dump samples presentation positions instead: one PNG per ~33 ms of media, which is one per
+  // decoded frame for the usual 24-30 fps content and never repeats the same instant.
+  constexpr int64_t kCaptureIntervalUs = 33'000;
   int written = 0;
-  int timeouts = 0;
-  int64_t lastTimestamp = 0;
-  uint32_t lastTimescale = 0;
-  bool haveTimestamp = false;
+  // The first committed frame can still be the blank one the graph produces before the decoder's
+  // first picture arrives; start sampling one frame interval in rather than at position zero.
+  int64_t nextCaptureUs = kCaptureIntervalUs;
   auto lastNewFrame = std::chrono::steady_clock::now();
 
-  // The engine renders continuously, so several committed frames can carry the same decoder frame.
-  // `waitForFrame` returns each commit; the dump keeps one PNG per new presentation time.
   while (written < wanted) {
-    coral::EffectFrame frame;
-    std::vector<uint8_t> pixels;
-    if (!session->sink()->node()->waitForFrame(&frame, &pixels, 5000)) {
-      if (++timeouts >= 2) {
-        break;
-      }
-      continue;
-    }
-    timeouts = 0;
-
-    const coral::RenderTime timestamp = frame.timestamp();
-    if (haveTimestamp && timestamp.value == lastTimestamp &&
-        timestamp.timescale == lastTimescale) {
-      // The engine keeps rendering the last input frame after the media has ended. Stop once no new
-      // presentation time has arrived for a while; the frame count is the requested one otherwise.
-      if (std::chrono::steady_clock::now() - lastNewFrame >= std::chrono::seconds(3)) {
-        break;
-      }
-      continue;
-    }
-    lastTimestamp = timestamp.value;
-    lastTimescale = timestamp.timescale;
-    haveTimestamp = true;
-    lastNewFrame = std::chrono::steady_clock::now();
-
-    CapturedFrame captured;
-    captured.width = frame.width();
-    captured.height = frame.height();
-    captured.sequence = static_cast<uint64_t>(written + 1);
-    captured.rgba = std::move(pixels);
-    char name[32] = {};
-    std::snprintf(name, sizeof(name), "frame_%05d.png", written + 1);
-    const auto path = std::filesystem::path(options.outputDirectory) / name;
-    if (!writePng(captured, path)) {
-      std::fprintf(stderr, "error: cannot write '%s'\n", path.string().c_str());
-      return 1;
-    }
-    std::printf("frame %d: %ux%u at %lld\n", written + 1, captured.width, captured.height,
-                static_cast<long long>(timestamp.value));
-    std::fflush(stdout);
-    ++written;
     if (session->listener()->failed()) {
       break;
     }
+    if (engine->stats().frameCount == 0) {
+      if (std::chrono::steady_clock::now() - lastNewFrame >= std::chrono::seconds(10)) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      continue;
+    }
+
+    const int64_t positionUs = session->player()->getCurrentPositionUs();
+    if (positionUs >= nextCaptureUs) {
+      // The surface is written during the frame's own GPU submission; wait for it before the CPU map.
+      engine->flushAndWait();
+      CapturedFrame frame;
+      if (!readSurface(session->surface()->iosurface(), &frame)) {
+        std::fprintf(stderr, "error: could not read the output IOSurface\n");
+        return 1;
+      }
+      char name[32] = {};
+      std::snprintf(name, sizeof(name), "frame_%05d.png", written + 1);
+      const auto path = std::filesystem::path(options.outputDirectory) / name;
+      if (!writePng(frame, path)) {
+        std::fprintf(stderr, "error: cannot write '%s'\n", path.string().c_str());
+        return 1;
+      }
+      std::printf("frame %d: %ux%u at %lldus\n", written + 1, frame.width, frame.height,
+                  static_cast<long long>(positionUs));
+      std::fflush(stdout);
+      ++written;
+      nextCaptureUs = positionUs + kCaptureIntervalUs;
+      lastNewFrame = std::chrono::steady_clock::now();
+      continue;
+    }
+
+    if (session->listener()->ended() && written > 0) {
+      break;
+    }
+    if (std::chrono::steady_clock::now() - lastNewFrame >= std::chrono::seconds(10)) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
 
   if (session->listener()->failed()) {
@@ -578,30 +546,6 @@ int runHeadless(const Options& options) {
 std::unique_ptr<PlayerSession> gSession;
 std::atomic<int> gExitCode{0};
 
-NSImage* imageFromFrame(const CapturedFrame& frame) {
-  if (frame.width == 0 || frame.height == 0 || frame.rgba.size() < static_cast<size_t>(frame.width) * frame.height * 4u) {
-    return nil;
-  }
-  NSBitmapImageRep* representation = [[NSBitmapImageRep alloc]
-      initWithBitmapDataPlanes:nullptr
-                    pixelsWide:static_cast<NSInteger>(frame.width)
-                    pixelsHigh:static_cast<NSInteger>(frame.height)
-                 bitsPerSample:8
-               samplesPerPixel:4
-                      hasAlpha:YES
-                      isPlanar:NO
-                colorSpaceName:NSCalibratedRGBColorSpace
-                   bytesPerRow:static_cast<NSInteger>(frame.width) * 4
-                  bitsPerPixel:32];
-  if (representation == nil) {
-    return nil;
-  }
-  std::memcpy(representation.bitmapData, frame.rgba.data(), frame.rgba.size());
-  NSImage* image = [[NSImage alloc] initWithSize:NSMakeSize(frame.width, frame.height)];
-  [image addRepresentation:representation];
-  return image;
-}
-
 } // namespace
 
 // ==================================================================================================
@@ -609,11 +553,23 @@ NSImage* imageFromFrame(const CapturedFrame& frame) {
 // ==================================================================================================
 
 @interface CoralDemoVideoView : NSView
-@property(nonatomic, strong) NSImage* frameImage;
-@property(nonatomic, assign) BOOL shouldStop;
+- (void)setSurface:(IOSurfaceRef)surface;
 @end
 
 @implementation CoralDemoVideoView
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+  self = [super initWithFrame:frameRect];
+  if (self != nil) {
+    // The frame is presented by the layer, not by `drawRect:`: the layer's contents is the IOSurface
+    // the effect graph writes. `contentsGravity` letterboxes a picture whose aspect differs.
+    self.wantsLayer = YES;
+    self.layer.backgroundColor = NSColor.blackColor.CGColor;
+    self.layer.contentsGravity = kCAGravityResizeAspect;
+    self.layer.masksToBounds = YES;
+  }
+  return self;
+}
 
 - (BOOL)isOpaque {
   return YES;
@@ -630,36 +586,20 @@ NSImage* imageFromFrame(const CapturedFrame& frame) {
   }
   const unichar character = [characters characterAtIndex:0];
   if (character == 27 /* Esc */ || character == 'q' || character == 'Q') {
-    self.shouldStop = YES;
     [NSApp terminate:nil];
   }
 }
 
-- (void)drawRect:(NSRect)dirtyRect {
-  (void)dirtyRect;
-  [[NSColor blackColor] setFill];
-  NSRectFill(self.bounds);
-
-  NSImage* image = self.frameImage;
-  if (image == nil) {
+- (void)setSurface:(IOSurfaceRef)surface {
+  if (surface == nullptr) {
     return;
   }
-  const NSSize imageSize = image.size;
-  if (imageSize.width <= 0 || imageSize.height <= 0) {
-    return;
-  }
-  const NSSize bounds = self.bounds.size;
-  const CGFloat scale = std::min(bounds.width / imageSize.width, bounds.height / imageSize.height);
-  const NSSize targetSize = NSMakeSize(imageSize.width * scale, imageSize.height * scale);
-  const NSRect target = NSMakeRect((bounds.width - targetSize.width) / 2.0,
-                                   (bounds.height - targetSize.height) / 2.0,
-                                   targetSize.width, targetSize.height);
-  [image drawInRect:target
-           fromRect:NSZeroRect
-          operation:NSCompositingOperationCopy
-           fraction:1.0
-     respectFlipped:NO
-              hints:nil];
+  // Re-assigning the contents is what tells Core Animation that the surface is a new image. The
+  // transaction disables the implicit fade a contents change would otherwise animate.
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  self.layer.contents = (__bridge id)surface;
+  [CATransaction commit];
 }
 
 @end
@@ -668,7 +608,7 @@ NSImage* imageFromFrame(const CapturedFrame& frame) {
 @property(nonatomic, strong) NSWindow* window;
 @property(nonatomic, strong) CoralDemoVideoView* view;
 @property(nonatomic, strong) NSTimer* timer;
-@property(nonatomic, assign) uint64_t lastSequence;
+@property(nonatomic, assign) uint64_t lastFrameCount;
 @property(nonatomic, assign) int displayedFrames;
 @property(nonatomic, assign) int frameLimit;
 @end
@@ -681,8 +621,8 @@ NSImage* imageFromFrame(const CapturedFrame& frame) {
   double contentWidth = 960;
   double contentHeight = 540;
   if (gSession != nullptr) {
-    const double videoWidth = static_cast<double>(gSession->sink()->width());
-    const double videoHeight = static_cast<double>(gSession->sink()->height());
+    const double videoWidth = static_cast<double>(gSession->surface()->width());
+    const double videoHeight = static_cast<double>(gSession->surface()->height());
     if (videoWidth > 0 && videoHeight > 0) {
       const double scale = std::min(960.0 / videoWidth, 720.0 / videoHeight);
       contentWidth = videoWidth * std::min(scale, 1.0);
@@ -705,7 +645,7 @@ NSImage* imageFromFrame(const CapturedFrame& frame) {
   window.contentView = view;
   self.window = window;
   self.view = view;
-  self.lastSequence = 0;
+  self.lastFrameCount = 0;
   self.displayedFrames = 0;
 
   [window center];
@@ -737,22 +677,18 @@ NSImage* imageFromFrame(const CapturedFrame& frame) {
     [NSApp terminate:nil];
     return;
   }
-
-  // The readback node posts its callback through the engine's callback queue; a host that wants the
-  // callback has to drain it. The demo does that on the main thread, right before it looks for a frame.
-  if (const auto engine = gSession->player()->getEffectEngine(); engine != nullptr) {
-    engine->pollCallbacks();
+  const auto engine = gSession->engine();
+  if (engine == nullptr) {
+    [NSApp terminate:nil];
+    return;
   }
 
-  if (const auto frame = gSession->sink()->takeAfter(self.lastSequence); frame.has_value()) {
-    self.lastSequence = frame->sequence;
-    NSImage* image = imageFromFrame(*frame);
-    if (image == nil) {
-      std::fprintf(stderr, "error: could not create an NSImage for a %ux%u frame\n",
-                   frame->width, frame->height);
-    }
-    self.view.frameImage = image;
-    [self.view setNeedsDisplay:YES];
+  // Every committed effect frame updates the surface. Re-assigning it is cheap: no pixels are copied,
+  // the layer only re-reads the same GPU allocation.
+  const uint64_t frameCount = static_cast<uint64_t>(engine->stats().frameCount);
+  if (frameCount > self.lastFrameCount) {
+    self.lastFrameCount = frameCount;
+    [self.view setSurface:gSession->surface()->iosurface()];
     ++self.displayedFrames;
   }
 
@@ -766,10 +702,8 @@ NSImage* imageFromFrame(const CapturedFrame& frame) {
   const int64_t duration = gSession->player()->getDurationUs();
   const bool reachedEnd = gSession->listener()->ended() ||
                           (duration > 0 && gSession->player()->getCurrentPositionUs() >= duration);
-  if (reachedEnd && gSession->sink()->frameCount() > 0) {
-    std::printf("played %llu frame(s), displayed %d\n",
-                static_cast<unsigned long long>(gSession->sink()->frameCount()),
-                self.displayedFrames);
+  if (reachedEnd && self.displayedFrames > 0) {
+    std::printf("displayed %d frame(s)\n", self.displayedFrames);
     [NSApp terminate:nil];
     return;
   }
