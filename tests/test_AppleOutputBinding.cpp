@@ -1321,6 +1321,79 @@ TEST(AppleLivePlayerEffectTest, CompositesACroppedSemiTransparentPgsObject) {
   player->release();
 }
 
+TEST(AppleLivePlayerEffectTest, CompositesFourPgsLayersWithDifferentCrops) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/pgs_alpha_four.mkv";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the four-layer PGS fixture is missing: " << path;
+  }
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  const auto surface = AppleIOSurface::create(320, 180, EffectPixelFormat::BGRA8);
+  ASSERT_NE(surface, nullptr);
+  const auto input = AppleVideoInput::createFrameInput(320, 180, 4);
+  ASSERT_NE(input, nullptr);
+  VideoEffectInput effectInput;
+  effectInput.inputNode = input;
+  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
+  player->setOutputSurface(surface);
+  player->setPreferredTextLanguage("eng");
+  const auto engine = player->getEffectEngine();
+  ASSERT_NE(engine, nullptr);
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] { return player->getPlaybackState() == coral::Player::State::STATE_READY; },
+                      10s)) << player->getPlaybackErrorMessage();
+  player->play();
+  ASSERT_TRUE(waitFor([&] { return probe->bitmapCueSeen(); }, 10s))
+      << "the four-layer PGS cue never reached the player events";
+  ASSERT_TRUE(waitFor([&] { return engine->isRunning() && engine->stats().frameCount > 0; }, 15s))
+      << engine->diagnostics();
+
+  // 8x8 plane mapped to 320x180:
+  //   red-only (0,0)..(4,4)
+  //   red+green overlap (2,2)..(4,4)
+  //   blue crop (0,0,2,2) in window (4,0)
+  //   yellow crop (2,2,2,2) in window (4,4)
+  bool redOnly = false;
+  bool redGreen = false;
+  bool blue = false;
+  bool yellow = false;
+  std::vector<uint8_t> redPixel;
+  std::vector<uint8_t> overlapPixel;
+  std::vector<uint8_t> bluePixel;
+  std::vector<uint8_t> yellowPixel;
+  for (int attempt = 0; attempt < 100 && (!redOnly || !redGreen || !blue || !yellow); ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    redPixel = pixelAt(surface->iosurface(), 20, 20);
+    overlapPixel = pixelAt(surface->iosurface(), 100, 68);
+    bluePixel = pixelAt(surface->iosurface(), 200, 20);
+    yellowPixel = pixelAt(surface->iosurface(), 200, 112);
+    redOnly = redPixel[2] >= 90 && redPixel[2] <= 170 && redPixel[0] <= 40 && redPixel[1] <= 40;
+    redGreen = overlapPixel[1] >= 90 && overlapPixel[0] <= 40 && overlapPixel[2] >= 35 &&
+               overlapPixel[2] <= 90;
+    blue = bluePixel[0] >= 90 && bluePixel[0] <= 170 && bluePixel[1] <= 40 &&
+           bluePixel[2] <= 40;
+    yellow = yellowPixel[2] >= 90 && yellowPixel[2] <= 170 && yellowPixel[1] >= 90 &&
+             yellowPixel[1] <= 170 && yellowPixel[0] <= 40;
+    if (!redOnly || !redGreen || !blue || !yellow) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(redOnly) << "red window; BGRA=" << static_cast<int>(redPixel[0]) << ","
+                       << static_cast<int>(redPixel[1]) << "," << static_cast<int>(redPixel[2]);
+  EXPECT_TRUE(redGreen) << "red+green crop overlap; BGRA="
+                        << static_cast<int>(overlapPixel[0]) << ","
+                        << static_cast<int>(overlapPixel[1]) << ","
+                        << static_cast<int>(overlapPixel[2]);
+  EXPECT_TRUE(blue) << "blue crop; BGRA=" << static_cast<int>(bluePixel[0]) << ","
+                    << static_cast<int>(bluePixel[1]) << "," << static_cast<int>(bluePixel[2]);
+  EXPECT_TRUE(yellow) << "yellow crop; BGRA=" << static_cast<int>(yellowPixel[0]) << ","
+                      << static_cast<int>(yellowPixel[1]) << ","
+                      << static_cast<int>(yellowPixel[2]);
+  player->release();
+}
+
 TEST(AppleLivePlayerEffectTest, PlaysHdr10AndReportsItsColorInfo) {
   const char* const asset = std::getenv("CORAL_HDR_ASSET");
   if (asset == nullptr || !std::filesystem::exists(asset)) {
