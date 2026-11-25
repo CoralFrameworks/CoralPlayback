@@ -624,6 +624,11 @@ std::atomic<int> gExitCode{0};
   // transaction disables the implicit fade a contents change would otherwise animate.
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
+  // The graph writes every frame into the same IOSurface, so the contents pointer does not change.
+  // Core Animation treats an unchanged pointer as "no new image" and can stop sampling the surface;
+  // clearing it first inside the same transaction makes each frame a real contents change without a
+  // visible black frame.
+  self.layer.contents = nil;
   self.layer.contents = (__bridge id)surface;
   [CATransaction commit];
 }
