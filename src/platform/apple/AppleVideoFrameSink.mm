@@ -211,24 +211,22 @@ private:
   size_t mIndex = 0;
 };
 
-/** Keeps a decoder buffer alive until the graph has sampled its surface and releases it then. */
-class SourceLease final {
-public:
-  explicit SourceLease(std::shared_ptr<AVPixelBuffer> frame) : mFrame(std::move(frame)) {
+/**
+ * Retains the platform pixel buffer without going through the decoder buffer's owner.
+ *
+ * <p>The input node keeps this token until the conversion pass that sampled the surface completed,
+ * so the decoder cannot write a new image into the same surface while the GPU still reads it.
+ * Releasing it only drops a CoreVideo reference; it never calls back into the decoder, so it stays
+ * safe even after the decoder has been destroyed.
+ */
+std::shared_ptr<void> retainPixelBuffer(const CVPixelBufferRef buffer) {
+  if (buffer == nullptr) {
+    return nullptr;
   }
-
-  ~SourceLease() {
-    if (mFrame != nullptr) {
-      mFrame->release();
-    }
-  }
-
-  SourceLease(const SourceLease&) = delete;
-  SourceLease& operator=(const SourceLease&) = delete;
-
-private:
-  std::shared_ptr<AVPixelBuffer> mFrame;
-};
+  CFRetain(buffer);
+  return std::shared_ptr<void>(const_cast<void*>(static_cast<const void*>(buffer)),
+                               [](void* value) { CFRelease(static_cast<CFTypeRef>(value)); });
+}
 
 PixelBufferView makeView(const IOSurfaceRef surface, const uint32_t width, const uint32_t height,
                          const int64_t positionUs, const ColorInfo& color,
@@ -328,13 +326,16 @@ bool AppleVideoFrameSink::submit(std::shared_ptr<AVPixelBuffer> frame, const int
       frame->release();
       return false;
     }
-    auto lease = std::make_shared<SourceLease>(std::move(frame));
     const PixelBufferView view = makeView(surface, width, height, positionUs, color,
-                                          std::move(lease));
+                                          retainPixelBuffer(source));
     if (mState->input->submit(view) != EffectResult::Success) {
       mState->dropped.fetch_add(1, std::memory_order_relaxed);
+      frame->release();
       return false;
     }
+    // The input node keeps the CoreVideo surface token until the graph submission completes; the
+    // decoder's own buffer can go back now, so VideoToolbox is not starved of pool slots.
+    frame->release();
     mState->submitted.fetch_add(1, std::memory_order_relaxed);
     if (mState->direct.fetch_add(1, std::memory_order_relaxed) == 0) {
       MINILOG_INFO("the Apple sink samples the decoder's BGRA IOSurface directly");
@@ -363,15 +364,16 @@ bool AppleVideoFrameSink::submit(std::shared_ptr<AVPixelBuffer> frame, const int
       frame->release();
       return false;
     }
-    auto lease = std::make_shared<SourceLease>(std::move(frame));
     const PixelBufferView view = makeView(surface, width, height, positionUs, color,
-                                          std::move(lease), EffectPixelFormat::YUV420);
+                                          retainPixelBuffer(source), EffectPixelFormat::YUV420);
     if (mState->input->submit(view) != EffectResult::Success) {
-      // The source lease releases the frame when the view goes out of scope; the conversion ring has
-      // no frame left to fall back on, so this failure is reported as a drop.
+      // The token releases the surface; the conversion ring has no frame left to fall back on, so
+      // this failure is reported as a drop.
       mState->dropped.fetch_add(1, std::memory_order_relaxed);
+      frame->release();
       return false;
     }
+    frame->release();
     mState->submitted.fetch_add(1, std::memory_order_relaxed);
     if (mState->direct.fetch_add(1, std::memory_order_relaxed) == 0) {
       MINILOG_INFO("the Apple sink samples the decoder's NV12 IOSurface directly");
@@ -443,8 +445,8 @@ void AppleVideoFrameSink::discard(std::shared_ptr<AVPixelBuffer> frame) {
 }
 
 void AppleVideoFrameSink::flush() {
-  // Slots still held by the graph return themselves when their leases are released; dropping the
-  // queued platform frames is the effect input node's job.
+  // The decoder buffers are returned as soon as the input node accepts a frame; conversion slots
+  // return themselves through their leases, and the input node owns any surface token it still needs.
 }
 
 bool AppleVideoFrameSink::isZeroCopy() const {

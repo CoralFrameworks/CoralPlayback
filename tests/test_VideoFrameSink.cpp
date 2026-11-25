@@ -33,12 +33,15 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace coral {
 namespace {
@@ -49,12 +52,20 @@ using namespace std::chrono_literals;
 class RecordingVideoFrameSink final : public VideoFrameSink {
 public:
   bool submit(std::shared_ptr<AVPixelBuffer> frame, int64_t positionUs) override {
-    static_cast<void>(positionUs);
+    {
+      const std::lock_guard<std::mutex> lock(mutex);
+      positions.push_back(positionUs);
+    }
     if (frame != nullptr) {
       frame->release();
     }
     submitted.fetch_add(1, std::memory_order_acq_rel);
     return true;
+  }
+
+  std::vector<int64_t> recordedPositions() {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return positions;
   }
 
   void discard(std::shared_ptr<AVPixelBuffer> frame) override {
@@ -69,6 +80,10 @@ public:
 
   std::atomic<int> submitted{0};
   std::atomic<int> discarded{0};
+
+private:
+  std::mutex mutex;
+  std::vector<int64_t> positions;
 };
 
 bool waitFor(const std::function<bool()>& predicate, const std::chrono::milliseconds timeout) {
@@ -109,10 +124,17 @@ TEST(VideoFrameSinkTest, ReceivesDecodedFramesWithoutAnOutputPath) {
     player->release();
     GTEST_SKIP() << "the effect engine could not start on this host: " << engine->diagnostics();
   }
-  EXPECT_TRUE(waitFor([&] { return sink->submitted.load(std::memory_order_acquire) > 0; }, 15s))
-      << "the renderer never handed a frame to the custom sink: " << engine->diagnostics();
+  EXPECT_TRUE(waitFor([&] { return sink->submitted.load(std::memory_order_acquire) >= 10; }, 15s))
+      << "the renderer never handed enough frames to the custom sink: " << engine->diagnostics();
 
   player->release();
+
+  // VideoToolbox calls back in decode order; the renderer must not see a frame whose presentation
+  // time is older than the one before it, or its release control drops the reordered frames.
+  const auto positions = sink->recordedPositions();
+  ASSERT_GT(positions.size(), 1u);
+  EXPECT_TRUE(std::is_sorted(positions.begin(), positions.end()))
+      << "presentation times went backwards: " << positions[0] << ", " << positions[1];
 }
 
 } // namespace
