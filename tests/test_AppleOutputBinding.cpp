@@ -177,6 +177,23 @@ std::vector<uint8_t> centrePixel(IOSurfaceRef surface) {
   return pixel;
 }
 
+/** @return the BGRA bytes of the pixel at (@p x, @p y) of @p surface. */
+std::vector<uint8_t> pixelAt(IOSurfaceRef surface, const int x, const int y) {
+  std::vector<uint8_t> pixel(4, 0);
+  if (surface == nullptr || IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr) != KERN_SUCCESS) {
+    return pixel;
+  }
+  const auto* base = static_cast<const uint8_t*>(IOSurfaceGetBaseAddress(surface));
+  const size_t stride = IOSurfaceGetBytesPerRow(surface);
+  const size_t width = IOSurfaceGetWidth(surface);
+  const size_t height = IOSurfaceGetHeight(surface);
+  const int clampedX = std::clamp(x, 0, static_cast<int>(width) - 1);
+  const int clampedY = std::clamp(y, 0, static_cast<int>(height) - 1);
+  std::memcpy(pixel.data(), base + clampedY * stride + clampedX * 4, 4);
+  IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, nullptr);
+  return pixel;
+}
+
 // ==================================================================================================
 // The surface wrapper
 // ==================================================================================================
@@ -880,7 +897,7 @@ TEST(AppleLivePlayerEffectTest, ReportsAndSelectsSideLoadedSubtitleTracks) {
   player->release();
 }
 
-TEST(AppleLivePlayerEffectTest, CompositesAPgsCueIntoTheOutputSurface) {
+TEST(AppleLivePlayerEffectTest, CompositesAPaletteOnlyPgsUpdateIntoTheOutputSurface) {
   const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/pgs_subtitle_5s.mkv";
   if (!std::filesystem::exists(path)) {
     GTEST_SKIP() << "the PGS fixture is missing: " << path;
@@ -921,7 +938,8 @@ TEST(AppleLivePlayerEffectTest, CompositesAPgsCueIntoTheOutputSurface) {
                    << static_cast<int>(pixel[0]) << "," << static_cast<int>(pixel[1]) << ","
                    << static_cast<int>(pixel[2]) << "," << static_cast<int>(pixel[3]);
 
-  // The second PGS display set replaces red with blue at 2 s.
+  // The second PGS display set is a palette-only update at 2 s: it has no ODS and reuses the red
+  // object with the blue PDS.
   ASSERT_TRUE(waitFor([&] { return player->getCurrentPositionUs() >= 2'200'000; }, 10s));
   bool blue = false;
   for (int attempt = 0; attempt < 100 && !blue; ++attempt) {
@@ -994,6 +1012,57 @@ TEST(AppleLivePlayerEffectTest, CompositesAVobSubCueIntoTheOutputSurface) {
   EXPECT_TRUE(green) << "the VobSub green replacement was not composited; BGRA="
                      << static_cast<int>(pixel[0]) << "," << static_cast<int>(pixel[1]) << ","
                      << static_cast<int>(pixel[2]) << "," << static_cast<int>(pixel[3]);
+  player->release();
+}
+
+TEST(AppleLivePlayerEffectTest, CompositesPgsWindowsAndObjectsAtTheirPositions) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/pgs_multi_window_5s.mkv";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the multi-window PGS fixture is missing: " << path;
+  }
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  const auto surface = AppleIOSurface::create(320, 180, EffectPixelFormat::BGRA8);
+  ASSERT_NE(surface, nullptr);
+  const auto input = AppleVideoInput::createFrameInput(320, 180, 4);
+  ASSERT_NE(input, nullptr);
+  VideoEffectInput effectInput;
+  effectInput.inputNode = input;
+  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
+  player->setOutputSurface(surface);
+  player->setPreferredTextLanguage("eng");
+  const auto engine = player->getEffectEngine();
+  ASSERT_NE(engine, nullptr);
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] { return player->getPlaybackState() == coral::Player::State::STATE_READY; },
+                      10s)) << player->getPlaybackErrorMessage();
+  player->play();
+  ASSERT_TRUE(waitFor([&] { return probe->bitmapCueSeen(); }, 10s))
+      << "the multi-window PGS cue never reached the player events";
+  ASSERT_TRUE(waitFor([&] { return engine->isRunning() && engine->stats().frameCount > 0; }, 15s))
+      << engine->diagnostics();
+
+  // The cue has two 2x2 windows: left red, right blue, covering the upper half of a 4x4 plane.
+  bool leftRed = false;
+  bool rightBlue = false;
+  std::vector<uint8_t> left;
+  std::vector<uint8_t> right;
+  for (int attempt = 0; attempt < 100 && (!leftRed || !rightBlue); ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    left = pixelAt(surface->iosurface(), 80, 45);
+    right = pixelAt(surface->iosurface(), 240, 45);
+    leftRed = left[2] >= 200 && left[0] <= 130;
+    rightBlue = right[0] >= 200 && right[2] <= 130;
+    if (!leftRed || !rightBlue) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(leftRed) << "left PGS window; BGRA=" << static_cast<int>(left[0]) << ","
+                       << static_cast<int>(left[1]) << "," << static_cast<int>(left[2]);
+  EXPECT_TRUE(rightBlue) << "right PGS window; BGRA=" << static_cast<int>(right[0]) << ","
+                         << static_cast<int>(right[1]) << "," << static_cast<int>(right[2]);
   player->release();
 }
 
