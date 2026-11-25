@@ -892,10 +892,21 @@ TEST(AppleLivePlayerEffectTest, PlaysHdr10AndReportsItsColorInfo) {
       << "the HDR file never reached the effect output: " << engine->diagnostics();
   EXPECT_GT(appleSink->submittedFrameCount(), 0u)
       << "the HDR decoder frame never reached the Apple sink";
-  EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
-  const auto pixel = centrePixel(surface->iosurface());
-  EXPECT_TRUE(pixel != std::vector<uint8_t>({0, 0, 0, 0}))
-      << "the HDR tone-map did not reach the SDR output surface";
+  // The first presented frame can be black in the source itself; poll the output before deciding the
+  // tone-map never reached it.
+  bool nonBlack = false;
+  std::vector<uint8_t> pixel;
+  for (int attempt = 0; attempt < 100 && !nonBlack; ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    pixel = centrePixel(surface->iosurface());
+    nonBlack = pixel != std::vector<uint8_t>({0, 0, 0, 0});
+    if (!nonBlack) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(nonBlack) << "the HDR tone-map did not reach the SDR output surface; centre pixel="
+                        << static_cast<int>(pixel[0]) << "," << static_cast<int>(pixel[1]) << ","
+                        << static_cast<int>(pixel[2]) << "," << static_cast<int>(pixel[3]);
   player->release();
 }
 
