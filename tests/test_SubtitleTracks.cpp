@@ -177,6 +177,7 @@ TEST(SubtitleTracksTest, ReadsTheForcedFlagFromAMatroskaTrack) {
         continue;
       }
       EXPECT_EQ(track.format->getLanguage(), "zho");
+      EXPECT_EQ(track.format->getLabel(), "Chinese forced");
       EXPECT_NE(track.format->getSelectionFlags() &
                   static_cast<MediaSelectionFlags>(MediaSelectionFlags::kMediaSelectionForced),
                 static_cast<MediaSelectionFlags>(0));
