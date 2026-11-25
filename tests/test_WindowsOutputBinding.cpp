@@ -15,12 +15,15 @@
  */
 
 #include <coral/playback/VideoOutput.h>
+#include <coral/playback/win32/Win32TextureSurface.h>
 #include <coral/playback/win32/Win32WindowSurface.h>
+#include <coral/playback/win32/WindowsTextureOutputNodeFactory.h>
 
 #include "platform/win32/WindowsVideoOutputNodeFactory.h"
 
 #include <gtest/gtest.h>
 
+#include <d3d11.h>
 #include <windows.h>
 
 namespace coral {
@@ -95,6 +98,51 @@ TEST(WindowsVideoOutputFactoryTest, RejectsNullAndInvalidSurfaces) {
   ASSERT_NE(surface, nullptr);
   DestroyWindow(window);
   EXPECT_EQ(factory.create(surface), nullptr);
+}
+
+ID3D11Device* createD3d11Device() {
+  ID3D11Device* device = nullptr;
+  D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
+  const HRESULT result = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0,
+                                            D3D11_SDK_VERSION, &device, &level, nullptr);
+  return SUCCEEDED(result) ? device : nullptr;
+}
+
+TEST(Win32TextureSurfaceTest, CreatesAndExposesItsDevice) {
+  ID3D11Device* const device = createD3d11Device();
+  if (device == nullptr) {
+    GTEST_SKIP() << "no D3D11 hardware device on this host";
+  }
+  const auto surface = Win32TextureSurface::create(device, 64, 48);
+  ASSERT_NE(surface, nullptr);
+  EXPECT_TRUE(surface->isValid());
+  EXPECT_EQ(surface->device(), device);
+  EXPECT_EQ(surface->width(), 64u);
+  EXPECT_EQ(surface->height(), 48u);
+  EXPECT_EQ(surface->currentTexture(), nullptr);
+  device->Release();
+}
+
+TEST(WindowsTextureOutputFactoryTest, CreatesTheSharedTextureOutput) {
+  ID3D11Device* const device = createD3d11Device();
+  if (device == nullptr) {
+    GTEST_SKIP() << "no D3D11 hardware device on this host";
+  }
+  const auto surface = Win32TextureSurface::create(device, 64, 48);
+  ASSERT_NE(surface, nullptr);
+  WindowsTextureOutputNodeFactory factory;
+  {
+    const auto output = factory.create(surface);
+    EXPECT_NE(output, nullptr);
+    EXPECT_NE(surface->outputNode(), nullptr);
+  }
+  uint32_t width = 0;
+  uint32_t height = 0;
+  EXPECT_TRUE(factory.querySize(surface, &width, &height));
+  EXPECT_EQ(width, 64u);
+  EXPECT_EQ(height, 48u);
+  surface->release();
+  device->Release();
 }
 
 } // namespace

@@ -78,7 +78,7 @@ target_compile_definitions(${TARGET} PRIVATE CORAL_GRAPHICS_RESOURCE_DIR="${CORA
 
 if (WIN32 AND NOT ANDROID)
   target_sources(${TARGET} PRIVATE test_WindowsOutputBinding.cpp test_LivePlayerEffect.cpp)
-  target_link_libraries(${TARGET} PRIVATE effect_win)
+  target_link_libraries(${TARGET} PRIVATE effect_win d3d11 dxgi)
 endif ()
 
 if (APPLE)
