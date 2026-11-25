@@ -176,8 +176,7 @@ TEST(SubtitleTracksTest, ReadsTheForcedFlagFromAMatroskaTrack) {
       if (track.type != TrackType::Text || track.format == nullptr) {
         continue;
       }
-      // The Matroska extractor does not currently publish TrackEntry language, so the assertion
-      // is about the container's forced flag and the selection it causes, not the language tag.
+      EXPECT_EQ(track.format->getLanguage(), "zho");
       EXPECT_NE(track.format->getSelectionFlags() &
                   static_cast<MediaSelectionFlags>(MediaSelectionFlags::kMediaSelectionForced),
                 static_cast<MediaSelectionFlags>(0));
