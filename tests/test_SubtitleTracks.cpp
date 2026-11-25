@@ -264,5 +264,32 @@ TEST(SubtitleTracksTest, DeliversTheBitmapsOfAPgsTrack) {
   player->release();
 }
 
+TEST(SubtitleTracksTest, DeliversTheBitmapsOfAVobSubTrack) {
+  const auto path = std::filesystem::path(CORAL_ASSETS_DIR) / "video/vobsub_subtitle_5s.mkv";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the VobSub fixture is missing: " << path;
+  }
+  auto player = LivePlayer::create(path.string(), LivePlayer::Configuration{
+      .audioEnabled = false, .videoEnabled = false, .imageEnabled = false,
+      .textEnabled = true, .metadataEnabled = false});
+  ASSERT_NE(player, nullptr);
+  auto output = std::make_shared<BitmapCueOutput>();
+  player->setTextOutput(output);
+  player->setPreferredTextLanguage("eng");
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] {
+    return player->getPlaybackState() == Player::State::STATE_READY ||
+           !player->getPlaybackErrorMessage().empty();
+  }, 10s)) << player->getPlaybackErrorMessage();
+  ASSERT_TRUE(player->getPlaybackErrorMessage().empty());
+  player->play();
+  ASSERT_TRUE(output->waitForBitmap(5s)) << "the VobSub bitmap cue never reached TextOutput";
+  EXPECT_EQ(output->width(), 4);
+  EXPECT_EQ(output->height(), 2);
+  EXPECT_EQ(output->pixels().size(), 32u);
+  EXPECT_EQ(output->pixels()[3], 255);
+  player->release();
+}
+
 } // namespace
 } // namespace coral
