@@ -1724,6 +1724,27 @@ void AvLivePlayer::prefetchThumbnail(const int64_t positionUs) {
   }
 }
 
+void AvLivePlayer::prefetchThumbnails(const int64_t startUs, const int64_t endUs,
+                                      const int64_t stepUs) {
+  if (startUs < 0 || endUs <= startUs || stepUs <= 0) {
+    return;
+  }
+  std::shared_ptr<ThumbnailProvider> provider;
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    provider = thumbnailProvider;
+  }
+  if (provider == nullptr) {
+    return;
+  }
+  constexpr int kMaxPrefetchPositions = 64;
+  int count = 0;
+  for (int64_t positionUs = startUs; positionUs < endUs && count < kMaxPrefetchPositions;
+       positionUs += stepUs, ++count) {
+    provider->prefetch(positionUs);
+  }
+}
+
 void AvLivePlayer::onVideoFrameRendered(std::shared_ptr<Fence> fence) {
   const auto positionUs = pendingVideoFramePositionUs.load(std::memory_order_relaxed);
   const std::lock_guard<Mutex> lock(outputLock);

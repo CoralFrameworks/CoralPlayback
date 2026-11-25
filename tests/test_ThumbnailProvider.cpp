@@ -38,6 +38,7 @@ public:
 
   void prefetch(const int64_t positionUs) override {
     prefetched.store(positionUs, std::memory_order_release);
+    prefetchCount.fetch_add(1, std::memory_order_acq_rel);
   }
 
   void cancel() override {
@@ -46,6 +47,7 @@ public:
 
   std::atomic<int64_t> requested{0};
   std::atomic<int64_t> prefetched{0};
+  std::atomic<int> prefetchCount{0};
   std::atomic<int> cancelled{0};
 };
 
@@ -66,6 +68,9 @@ TEST(ThumbnailProviderTest, ForwardsRequestsAndCancelsOnRelease) {
 
   player->prefetchThumbnail(2'500'000);
   EXPECT_EQ(provider->prefetched.load(std::memory_order_acquire), 2'500'000);
+
+  player->prefetchThumbnails(0, 5'000'000, 1'000'000);
+  EXPECT_EQ(provider->prefetchCount.load(std::memory_order_acquire), 6);
 
   player->release();
   EXPECT_GE(provider->cancelled.load(std::memory_order_acquire), 1);

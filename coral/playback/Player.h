@@ -287,6 +287,16 @@ public:
   }
 
   /**
+   * Warms thumbnails across a seek-bar range. The range is [startUs, endUs) sampled every stepUs;
+   * at most 64 positions are requested. Invalid ranges or a non-positive step do nothing.
+   */
+  virtual void prefetchThumbnails(int64_t startUs, int64_t endUs, int64_t stepUs) {
+    static_cast<void>(startUs);
+    static_cast<void>(endUs);
+    static_cast<void>(stepUs);
+  }
+
+  /**
    * Sets the preferred audio language as an IETF BCP 47 tag.
    *
    * <p>An explicit {@code selectTrack} on an audio track still wins. Empty clears the preference.
