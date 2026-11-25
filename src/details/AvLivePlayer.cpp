@@ -16,6 +16,7 @@
 #include "AvLivePlayer.h"
 
 #include "CpuVideoFrameSink.h"
+#include "DecodeAudioRenderer.h"
 #include "DecodeVideoRenderer.h"
 #include "ImageRenderer.h"
 #include "MetadataRenderer.h"
@@ -1634,6 +1635,26 @@ std::vector<Chapter> AvLivePlayer::getChapters() const {
   return chapters;
 }
 
+std::vector<AudioRendererStats> AvLivePlayer::getAudioRendererStats() const {
+  std::vector<AudioRendererStats> result;
+  for (size_t index = 0; index < renderers.size(); ++index) {
+    const auto renderer = std::dynamic_pointer_cast<DecodeAudioRenderer>(renderers[index]);
+    if (renderer == nullptr) {
+      continue;
+    }
+    auto stats = renderer->getRenderStats();
+    stats.rendererIndex = static_cast<int>(index);
+    stats.enabled = isRendererEnabled(renderers[index]);
+    result.push_back(std::move(stats));
+  }
+  return result;
+}
+
+uint64_t AvLivePlayer::getAudioRendererSwitchCount() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return audioRendererSwitchCount;
+}
+
 void AvLivePlayer::setThumbnailProvider(std::shared_ptr<ThumbnailProvider> provider) {
   std::shared_ptr<ThumbnailProvider> previous;
   {
@@ -1808,6 +1829,13 @@ void AvLivePlayer::selectTrackInternal(const TrackSelectionRequest& request) {
   selector->setSelectionOverride(request.rendererIndex,
     SelectionOverride(request.groupIndex, request.trackIndex));
   if (audioTarget) {
+    {
+      const std::lock_guard<Mutex> lock(outputLock);
+      if (activeAudioRendererIndex != request.rendererIndex) {
+        activeAudioRendererIndex = request.rendererIndex;
+        ++audioRendererSwitchCount;
+      }
+    }
     selector->setRendererDisabled(request.rendererIndex, false);
     for (size_t index = 0; index < renderers.size(); ++index) {
       if (renderers[index] != nullptr &&

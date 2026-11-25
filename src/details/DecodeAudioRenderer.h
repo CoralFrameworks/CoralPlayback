@@ -22,6 +22,8 @@
 
 #include "DecoderCounters.h"
 
+#include <coral/playback/AudioRenderStats.h>
+
 #include <coral/audio/AudioOutputSink.h>
 #include <coral/source/FormatHolder.h>
 
@@ -64,6 +66,9 @@ public:
   }
 
   void setVolume(float volume);
+
+  /** Returns a snapshot of this renderer's decoder and sink counters. */
+  [[nodiscard]] AudioRendererStats getRenderStats() const;
 
   const char* getName() const override {
     return "DecodeAudioRenderer";
@@ -148,6 +153,7 @@ private:
   std::shared_ptr<WakeupListener> wakeupListener;
 
   DecoderCounters decoderCounters{};
+  uint64_t sinkBackpressureCount = 0;
   std::shared_ptr<MediaFormat> inputFormat;
   int encoderDelay;
   int encoderPadding;

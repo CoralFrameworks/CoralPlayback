@@ -155,6 +155,10 @@ public:
 
   [[nodiscard]] std::vector<Chapter> getChapters() const override;
 
+  [[nodiscard]] std::vector<AudioRendererStats> getAudioRendererStats() const override;
+
+  [[nodiscard]] uint64_t getAudioRendererSwitchCount() const override;
+
   void setThumbnailProvider(std::shared_ptr<ThumbnailProvider> provider) override;
 
   [[nodiscard]] std::shared_ptr<ThumbnailProvider> getThumbnailProvider() const override;

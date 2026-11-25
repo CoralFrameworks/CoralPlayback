@@ -125,6 +125,10 @@ public:
 
   [[nodiscard]] std::vector<Chapter> getChapters() const override;
 
+  [[nodiscard]] std::vector<AudioRendererStats> getAudioRendererStats() const override;
+
+  [[nodiscard]] uint64_t getAudioRendererSwitchCount() const override;
+
   void setThumbnailProvider(std::shared_ptr<ThumbnailProvider> provider) override;
 
   [[nodiscard]] std::shared_ptr<ThumbnailProvider> getThumbnailProvider() const override;
@@ -723,6 +727,8 @@ private:
   VideoColorInfo videoColorInfo;
   std::vector<Chapter> chapters;
   std::shared_ptr<ThumbnailProvider> thumbnailProvider;
+  int activeAudioRendererIndex = -1;
+  uint64_t audioRendererSwitchCount = 0;
   std::shared_ptr<Renderer::VideoColorInfoListener> videoColorInfoListenerRef;
   std::atomic<int64_t> pendingVideoFramePositionUs { 0 };
   std::atomic<SubtitleRenderMode> subtitleRenderMode{ SubtitleRenderMode::kAuto };

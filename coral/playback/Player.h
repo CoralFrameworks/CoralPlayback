@@ -16,6 +16,7 @@
 #ifndef CORAL_PLAYBACK_PLAYER_H
 #define CORAL_PLAYBACK_PLAYER_H
 
+#include <coral/playback/AudioRenderStats.h>
 #include <coral/playback/Chapters.h>
 #include <coral/playback/MetadataOutput.h>
 #include <coral/playback/Parameters.h>
@@ -259,6 +260,16 @@ public:
   /** Returns the chapters of the current media item, or an empty list when it has none. */
   [[nodiscard]] virtual std::vector<Chapter> getChapters() const {
     return {};
+  }
+
+  /** Returns diagnostics for every audio renderer, in renderer order. */
+  [[nodiscard]] virtual std::vector<AudioRendererStats> getAudioRendererStats() const {
+    return {};
+  }
+
+  /** Returns how many times the active audio renderer changed. */
+  [[nodiscard]] virtual uint64_t getAudioRendererSwitchCount() const {
+    return 0;
   }
 
   /**

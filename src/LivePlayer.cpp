@@ -184,6 +184,14 @@ std::vector<Chapter> LivePlayer::getChapters() const {
   return mImpl->getChapters();
 }
 
+std::vector<AudioRendererStats> LivePlayer::getAudioRendererStats() const {
+  return mImpl->getAudioRendererStats();
+}
+
+uint64_t LivePlayer::getAudioRendererSwitchCount() const {
+  return mImpl->getAudioRendererSwitchCount();
+}
+
 void LivePlayer::setThumbnailProvider(std::shared_ptr<ThumbnailProvider> provider) {
   mImpl->setThumbnailProvider(std::move(provider));
 }

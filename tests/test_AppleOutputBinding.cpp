@@ -781,6 +781,8 @@ TEST(AppleLivePlayerEffectTest, SwitchesBetweenMultipleAudioRenderers) {
   };
   const auto initialTracks = audioTracks();
   ASSERT_GE(initialTracks.size(), 2u);
+  ASSERT_EQ(player->getAudioRendererStats().size(), 2u);
+  EXPECT_EQ(player->getAudioRendererSwitchCount(), 0u);
   const auto target = std::find_if(initialTracks.begin(), initialTracks.end(),
       [&](const coral::Track& track) { return !track.selected; });
   ASSERT_NE(target, initialTracks.end());
@@ -799,6 +801,15 @@ TEST(AppleLivePlayerEffectTest, SwitchesBetweenMultipleAudioRenderers) {
     }
     return selected == 1 && targetSelected;
   }, 5s)) << "selecting a track did not activate exactly its audio renderer";
+  EXPECT_GE(player->getAudioRendererSwitchCount(), 1u);
+  EXPECT_TRUE(waitFor([&] {
+    const auto stats = player->getAudioRendererStats();
+    int enabledCount = 0;
+    for (const auto& entry : stats) {
+      enabledCount += entry.enabled ? 1 : 0;
+    }
+    return enabledCount == 1;
+  }, 5s)) << "the target audio renderer did not become the only enabled one";
 
   player->release();
 }
