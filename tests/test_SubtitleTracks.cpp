@@ -153,5 +153,41 @@ TEST(SubtitleTracksTest, ReportsAndSelectsInContainerTracks) {
   std::filesystem::remove(path);
 }
 
+TEST(SubtitleTracksTest, ReadsTheForcedFlagFromAMatroskaTrack) {
+  const auto path = std::filesystem::path(CORAL_ASSETS_DIR) / "video/forced_subtitle_5s.mkv";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the forced subtitle fixture is missing: " << path;
+  }
+  auto player = LivePlayer::create(path.string(), LivePlayer::Configuration{
+      .audioEnabled = false, .videoEnabled = false, .imageEnabled = false,
+      .textEnabled = true, .metadataEnabled = false});
+  ASSERT_NE(player, nullptr);
+  player->setPreferredTextLanguage("zho");
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] {
+    return player->getPlaybackState() == Player::State::STATE_READY ||
+           !player->getPlaybackErrorMessage().empty();
+  }, 10s)) << player->getPlaybackErrorMessage();
+  ASSERT_TRUE(player->getPlaybackErrorMessage().empty());
+
+  bool foundForced = false;
+  for (const auto& group : player->getCurrentTracks().groups) {
+    for (const auto& track : group.tracks) {
+      if (track.type != TrackType::Text || track.format == nullptr) {
+        continue;
+      }
+      // The Matroska extractor does not currently publish TrackEntry language, so the assertion
+      // is about the container's forced flag and the selection it causes, not the language tag.
+      EXPECT_NE(track.format->getSelectionFlags() &
+                  static_cast<MediaSelectionFlags>(MediaSelectionFlags::kMediaSelectionForced),
+                static_cast<MediaSelectionFlags>(0));
+      foundForced = true;
+      EXPECT_TRUE(track.selected) << "the forced zho track should be selected";
+    }
+  }
+  EXPECT_TRUE(foundForced) << "the forced Matroska subtitle track was not exposed";
+  player->release();
+}
+
 } // namespace
 } // namespace coral
