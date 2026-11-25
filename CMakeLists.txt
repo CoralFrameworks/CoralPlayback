@@ -387,6 +387,14 @@ if (ANDROID)
   )
 endif ()
 
+if (WIN32 AND NOT ANDROID)
+  list(APPEND PUBLIC_HDRS
+      coral/playback/win32/Win32TextureSurface.h
+      coral/playback/win32/Win32VideoFrameSource.h
+      coral/playback/win32/WindowsTextureOutputNodeFactory.h
+  )
+endif ()
+
 if (APPLE)
   list(APPEND PUBLIC_HDRS
       coral/playback/apple/AppleHardwareVideoSurface.h
@@ -488,7 +496,10 @@ set(SRCS
 
 if (WIN32 AND NOT ANDROID)
   list(APPEND SRCS
+      src/platform/win32/Win32TextureSurface.cpp
+      src/platform/win32/Win32VideoFrameSource.cpp
       src/platform/win32/Win32WindowSurface.cpp
+      src/platform/win32/WindowsTextureOutputNodeFactory.cpp
       src/platform/win32/WindowsVideoOutputNodeFactory.cpp
   )
 endif ()
