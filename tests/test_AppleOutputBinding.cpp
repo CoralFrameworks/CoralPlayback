@@ -1455,6 +1455,139 @@ TEST(AppleLivePlayerEffectTest, RedrawsASemiTransparentPgsObjectWithANewPalette)
   player->release();
 }
 
+TEST(AppleLivePlayerEffectTest, RedrawsACroppedSemiTransparentPgsWindowWithANewPalette) {
+  const std::string path =
+      std::string(CORAL_ASSETS_DIR) + "/video/pgs_alpha_crop_palette_5s.mkv";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the cropped alpha palette fixture is missing: " << path;
+  }
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  const auto surface = AppleIOSurface::create(320, 180, EffectPixelFormat::BGRA8);
+  ASSERT_NE(surface, nullptr);
+  const auto input = AppleVideoInput::createFrameInput(320, 180, 4);
+  ASSERT_NE(input, nullptr);
+  VideoEffectInput effectInput;
+  effectInput.inputNode = input;
+  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
+  player->setOutputSurface(surface);
+  player->setPreferredTextLanguage("eng");
+  const auto engine = player->getEffectEngine();
+  ASSERT_NE(engine, nullptr);
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] { return player->getPlaybackState() == coral::Player::State::STATE_READY; },
+                      10s)) << player->getPlaybackErrorMessage();
+  player->play();
+  ASSERT_TRUE(waitFor([&] { return probe->bitmapCueSeen(); }, 10s))
+      << "the cropped alpha palette cue never reached the player events";
+  ASSERT_TRUE(waitFor([&] { return engine->isRunning() && engine->stats().frameCount > 0; }, 15s))
+      << engine->diagnostics();
+
+  // 4x4 object cropped to 2x2 in a 2x2 window at (2,2) of an 8x8 plane.
+  const auto insideRed = [&] {
+    const auto pixel = pixelAt(surface->iosurface(), 100, 60);
+    return pixel[2] >= 90 && pixel[2] <= 170 && pixel[0] <= 60 && pixel[1] <= 60;
+  };
+  bool red = false;
+  for (int attempt = 0; attempt < 100 && !red; ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    red = insideRed();
+    if (!red) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(red) << "the cropped 50% red object was not composited";
+  EXPECT_TRUE([&] {
+    const auto pixel = pixelAt(surface->iosurface(), 20, 60);
+    return pixel[0] <= 20 && pixel[1] <= 20 && pixel[2] <= 20;
+  }()) << "the area outside the window should remain black";
+
+  ASSERT_TRUE(waitFor([&] { return player->getCurrentPositionUs() >= 2'200'000; }, 10s));
+  bool blue = false;
+  std::vector<uint8_t> bluePixel;
+  for (int attempt = 0; attempt < 100 && !blue; ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    bluePixel = pixelAt(surface->iosurface(), 100, 60);
+    blue = bluePixel[0] >= 90 && bluePixel[0] <= 170 && bluePixel[1] <= 60 && bluePixel[2] <= 60;
+    if (!blue) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(blue) << "the cropped palette-only blue redraw was not composited; BGRA="
+                    << static_cast<int>(bluePixel[0]) << "," << static_cast<int>(bluePixel[1]) << ","
+                    << static_cast<int>(bluePixel[2]) << "," << static_cast<int>(bluePixel[3]);
+  player->release();
+}
+
+TEST(AppleLivePlayerEffectTest, CompositesSixPgsLayersWithVariedCrops) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/pgs_six_crops.mkv";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the six-crop PGS fixture is missing: " << path;
+  }
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  const auto surface = AppleIOSurface::create(320, 180, EffectPixelFormat::BGRA8);
+  ASSERT_NE(surface, nullptr);
+  const auto input = AppleVideoInput::createFrameInput(320, 180, 4);
+  ASSERT_NE(input, nullptr);
+  VideoEffectInput effectInput;
+  effectInput.inputNode = input;
+  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
+  player->setOutputSurface(surface);
+  player->setPreferredTextLanguage("eng");
+  const auto engine = player->getEffectEngine();
+  ASSERT_NE(engine, nullptr);
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] { return player->getPlaybackState() == coral::Player::State::STATE_READY; },
+                      10s)) << player->getPlaybackErrorMessage();
+  player->play();
+  ASSERT_TRUE(waitFor([&] { return probe->bitmapCueSeen(); }, 10s))
+      << "the six-crop PGS cue never reached the player events";
+  ASSERT_TRUE(waitFor([&] { return engine->isRunning() && engine->stats().frameCount > 0; }, 15s))
+      << engine->diagnostics();
+
+  struct Sample final {
+    int x;
+    int y;
+    bool (*check)(const std::vector<uint8_t>&);
+  };
+  const std::vector<Sample> samples = {
+    {26, 22, [](const auto& p) { return p[2] >= 200 && p[0] <= 40 && p[1] <= 40; }},
+    {133, 22, [](const auto& p) { return p[1] >= 140 && p[0] <= 60 && p[2] <= 30; }},
+    {240, 22, [](const auto& p) { return p[0] >= 90 && p[0] <= 170 && p[1] <= 50 && p[2] <= 50; }},
+    {26, 112, [](const auto& p) { return p[2] >= 90 && p[2] <= 170 && p[1] >= 90 &&
+                                         p[1] <= 170 && p[0] <= 40; }},
+    {133, 112, [](const auto& p) { return p[2] >= 40 && p[2] <= 90 && p[0] >= 40 &&
+                                          p[0] <= 90 && p[1] <= 50; }},
+    {240, 112, [](const auto& p) { return p[0] >= 140 && p[1] >= 140 && p[2] <= 40; }},
+  };
+  std::vector<std::vector<uint8_t>> pixels(samples.size());
+  std::vector<bool> good(samples.size(), false);
+  for (int attempt = 0; attempt < 100 && std::find(good.begin(), good.end(), false) != good.end();
+       ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    bool all = true;
+    for (size_t i = 0; i < samples.size(); ++i) {
+      pixels[i] = pixelAt(surface->iosurface(), samples[i].x, samples[i].y);
+      good[i] = samples[i].check(pixels[i]);
+      all = all && good[i];
+    }
+    if (!all) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  for (size_t i = 0; i < samples.size(); ++i) {
+    EXPECT_TRUE(good[i]) << "sample " << i << " BGRA=" << static_cast<int>(pixels[i][0]) << ","
+                         << static_cast<int>(pixels[i][1]) << ","
+                         << static_cast<int>(pixels[i][2]);
+  }
+  player->release();
+}
+
 TEST(AppleLivePlayerEffectTest, PlaysHdr10AndReportsItsColorInfo) {
   const char* const asset = std::getenv("CORAL_HDR_ASSET");
   if (asset == nullptr || !std::filesystem::exists(asset)) {
