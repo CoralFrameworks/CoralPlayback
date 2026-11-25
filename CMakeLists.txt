@@ -306,6 +306,7 @@ set(PUBLIC_HDRS
     coral/playback/TextOutput.h
     coral/playback/TimedFormatQueue.h
     coral/playback/Tracks.h
+    coral/playback/VideoFrameOutput.h
     coral/playback/VideoFrameSink.h
     coral/playback/VideoOutput.h
     coral/playback/Volume.h
@@ -390,6 +391,7 @@ if (APPLE)
   list(APPEND PUBLIC_HDRS
       coral/playback/apple/AppleHardwareVideoSurface.h
       coral/playback/apple/AppleIOSurface.h
+      coral/playback/apple/AppleVideoFrameSource.h
       coral/playback/apple/AppleVideoInput.h
       coral/playback/apple/AppleVideoOutputNodeFactory.h
   )
@@ -508,7 +510,8 @@ if (APPLE)
       src/platform/apple/AppleIOSurface.mm
       src/platform/apple/AppleVideoFrameSink.h
       src/platform/apple/AppleVideoFrameSink.mm
-      src/platform/apple/AppleVideoInput.mm
+      src/platform/apple/AppleVideoFrameSource.mm
+    src/platform/apple/AppleVideoInput.mm
       src/platform/apple/AppleVideoOutputNodeFactory.mm
   )
 endif ()

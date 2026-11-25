@@ -169,6 +169,10 @@ Tracks LivePlayer::getCurrentTracks() const {
   return mImpl->getCurrentTracks();
 }
 
+VideoFrameOutput LivePlayer::getVideoFrameOutput() const {
+  return mImpl->getVideoFrameOutput();
+}
+
 void LivePlayer::selectTrack(int rendererIndex, int groupIndex, int trackIndex) {
   mImpl->selectTrack(rendererIndex, groupIndex, trackIndex);
 }

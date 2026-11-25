@@ -141,6 +141,8 @@ public:
 
   [[nodiscard]] Tracks getCurrentTracks() const override;
 
+  [[nodiscard]] VideoFrameOutput getVideoFrameOutput() const override;
+
   void selectTrack(int rendererIndex, int groupIndex, int trackIndex) override;
 
   void clearTrackSelection(int rendererIndex) override;

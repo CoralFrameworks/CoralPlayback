@@ -27,12 +27,14 @@
 #include <coral/playback/apple/AppleHardwareVideoSurface.h>
 #include <coral/playback/apple/AppleIOSurface.h>
 #include <coral/playback/apple/AppleVideoInput.h>
+#include <coral/playback/apple/AppleVideoFrameSource.h>
 #include <coral/playback/apple/AppleVideoOutputNodeFactory.h>
 
 #include "platform/apple/AppleVideoFrameSink.h"
 
 #include <effect/EffectEngine.h>
 #include <effect/EffectPassNode.h>
+#include <effect/NullOutputNode.h>
 #include <effect/ReadbackOutputNode.h>
 #include <effect/VideoFrameInputNode.h>
 #include <effect/platform/apple/AppleIOSurfaceInputNode.h>
@@ -689,6 +691,54 @@ TEST(AppleLivePlayerEffectTest, SwitchesBetweenTwoAudioTracks) {
   player->release();
 }
 
+TEST(AppleVideoFrameSourceTest, ImportsTheOutputSurfaceIntoTheUiDevice) {
+  const auto surface = AppleIOSurface::create(64, 48, EffectPixelFormat::BGRA8);
+  ASSERT_NE(surface, nullptr);
+
+  EffectEngineConfig config;
+  config.renderMode = EffectRenderMode::Manual;
+  config.renderWidth = 64;
+  config.renderHeight = 48;
+  config.timeBase = 1'000'000;
+  const auto engine = EffectEngine::create(config);
+  ASSERT_NE(engine, nullptr);
+  const auto input = VideoFrameInputNode::create(64, 48);
+  const auto nullOutput = NullOutputNode::create();
+  ASSERT_NE(input, nullptr);
+  ASSERT_NE(nullOutput, nullptr);
+  ASSERT_EQ(engine->attach(input), EffectResult::Success);
+  ASSERT_EQ(engine->attach(nullOutput), EffectResult::Success);
+  ASSERT_EQ(engine->connect(input, nullOutput), EffectResult::Success);
+  ASSERT_EQ(engine->setOutput(nullOutput), EffectResult::Success);
+  if (engine->start() != EffectResult::Success) {
+    GTEST_SKIP() << "the effect engine could not start: " << engine->diagnostics();
+  }
+  auto* const device = engine->device();
+  ASSERT_NE(device, nullptr);
+
+  auto source = AppleVideoFrameSource::create(surface, *device);
+  ASSERT_NE(source, nullptr);
+  VideoFrameOutput output;
+  output.surface = surface;
+  output.sequence = 1;
+  output.positionUs = 40000;
+  std::string error;
+  ASSERT_TRUE(source->refresh(output, error)) << error;
+  EXPECT_TRUE(source->image().isValid());
+  EXPECT_EQ(source->image().width, 64u);
+  EXPECT_EQ(source->image().height, 48u);
+  EXPECT_EQ(source->importCount(), 1u);
+  // The same sequence is served from the cached import.
+  ASSERT_TRUE(source->refresh(output, error)) << error;
+  EXPECT_EQ(source->importCount(), 1u);
+  output.sequence = 2;
+  ASSERT_TRUE(source->refresh(output, error)) << error;
+  EXPECT_EQ(source->importCount(), 2u);
+
+  source.reset();
+  engine->stop();
+}
+
 // ==================================================================================================
 // The player drives the IOSurface output
 // ==================================================================================================
@@ -807,6 +857,10 @@ TEST(AppleLivePlayerEffectTest, SamplesTheDecodersSurfaceThroughTheAppleSink) {
   }
   EXPECT_TRUE(hasVideo);
   EXPECT_TRUE(hasSelected);
+  const auto frameOutput = player->getVideoFrameOutput();
+  EXPECT_NE(frameOutput.surface, nullptr);
+  EXPECT_GT(frameOutput.sequence, 0u);
+  EXPECT_GE(frameOutput.positionUs, 0);
   EXPECT_GE(player->getBufferedPositionUs(), player->getCurrentPositionUs());
   const auto bufferedRanges = player->getBufferedRanges();
   if (player->getBufferedPositionUs() > player->getCurrentPositionUs()) {

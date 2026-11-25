@@ -20,6 +20,7 @@
 #include <coral/playback/Parameters.h>
 #include <coral/playback/TextOutput.h>
 #include <coral/playback/Tracks.h>
+#include <coral/playback/VideoFrameOutput.h>
 #include <coral/playback/Volume.h>
 #include <coral/source/MediaItem.h>
 #include <coral/source/MediaSourceEventListener.h>
@@ -230,6 +231,17 @@ public:
 
   /** Sets the factory that turns a media item into a media source. */
   virtual void setMediaSourceFactory(const std::shared_ptr<MediaSourceFactory>& factory) {}
+
+  /**
+   * Returns the latest frame the effect graph rendered into the application's surface.
+   *
+   * <p>A UI bridge polls it and imports the surface when {@link VideoFrameOutput::sequence}
+   * changes. The default implementation returns an empty value for players without an effect video
+   * pipeline.
+   */
+  [[nodiscard]] virtual VideoFrameOutput getVideoFrameOutput() const {
+    return {};
+  }
 
   /**
    * Returns the tracks of the current media item and the current selection.

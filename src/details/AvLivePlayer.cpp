@@ -207,6 +207,9 @@ void AvLivePlayer::enableVideoEffectPipeline(const std::shared_ptr<VideoOutputNo
   config.sharedContext = resolved.sharedContext;
 
   effectEngine = EffectEngine::create(config);
+  if (effectEngine != nullptr) {
+    effectEngine->setOnAfterFrame([this](backend::Device&) { onVideoFrameRendered(); });
+  }
   const std::shared_ptr<EffectInputNode> graphInput = resolved.inputNode;
   const std::shared_ptr<NullOutputNode> nullOutput = NullOutputNode::create();
   if (effectEngine == nullptr || graphInput == nullptr || nullOutput == nullptr) {
@@ -1539,6 +1542,19 @@ void AvLivePlayer::setVideoScalingModeInternal(const Message* msg) {
 
 Tracks AvLivePlayer::getCurrentTracks() const {
   return buildCurrentTracks();
+}
+
+VideoFrameOutput AvLivePlayer::getVideoFrameOutput() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return videoFrameOutput;
+}
+
+void AvLivePlayer::onVideoFrameRendered() {
+  const auto positionUs = pendingVideoFramePositionUs.load(std::memory_order_relaxed);
+  const std::lock_guard<Mutex> lock(outputLock);
+  videoFrameOutput.surface = pendingOutputSurface;
+  videoFrameOutput.positionUs = positionUs;
+  ++videoFrameOutput.sequence;
 }
 
 void AvLivePlayer::selectTrack(const int rendererIndex, const int groupIndex, const int trackIndex) {

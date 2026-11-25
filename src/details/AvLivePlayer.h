@@ -118,6 +118,8 @@ public:
 
   [[nodiscard]] Tracks getCurrentTracks() const override;
 
+  [[nodiscard]] VideoFrameOutput getVideoFrameOutput() const override;
+
   void selectTrack(int rendererIndex, int groupIndex, int trackIndex) override;
 
   void clearTrackSelection(int rendererIndex) override;
@@ -404,6 +406,9 @@ private:
 
   void applyVideoEffectSurface(const std::shared_ptr<VideoSurface>& surface);
 
+  /** Runs on the engine's render thread after a frame; updates the UI hand-off sequence. */
+  void onVideoFrameRendered();
+
   void setVideoScalingModeInternal(const Message* msg);
 
   void setVideoMirrorInternal(int flags);
@@ -673,6 +678,8 @@ private:
   /** The renderer of the application, before the subtitle overlay wraps it. */
   /** The last cue group delivered, so the effect pipeline can be enabled after it. */
   AVCueGroup currentCueGroup;
+  VideoFrameOutput videoFrameOutput;
+  std::atomic<int64_t> pendingVideoFramePositionUs { 0 };
   std::atomic<SubtitleRenderMode> subtitleRenderMode{ SubtitleRenderMode::kAuto };
   std::atomic<VideoScaleMode> videoScaleMode{ VideoScaleMode::Fit };
   std::vector<std::shared_ptr<SelectionCapabilities>> rendererCapabilities;
