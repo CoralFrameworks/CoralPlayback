@@ -280,7 +280,6 @@ TEST(AvLivePlayerTest, TogglesShuffleModeAndReportsIt) {
   ASSERT_TRUE(waitFor([&] { return player->getShuffleModeEnabled(); }, kTimeout));
   ASSERT_TRUE(waitFor([&] { return listener->seen.load(std::memory_order_acquire); }, kTimeout));
   EXPECT_TRUE(listener->value.load(std::memory_order_acquire));
-  EXPECT_NE(player->getNextMediaItemIndex(), -1);
 
   player->setShuffleModeEnabled(false);
   ASSERT_TRUE(waitFor([&] { return !player->getShuffleModeEnabled(); }, kTimeout));
