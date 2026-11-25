@@ -101,6 +101,16 @@ TEST(DiskThumbnailProviderTest, ServesANewProviderFromDisk) {
   EXPECT_EQ(secondFrame->width(), 4);
   EXPECT_EQ(secondFrame->height(), 4);
 
+  // A changed media fingerprint must not reuse the previous file.
+  auto thirdSource = std::make_shared<FakeThumbnailProvider>();
+  auto changedConfig = config;
+  changedConfig.mediaFingerprint = "v2";
+  auto third = DiskThumbnailProvider::create("file:///video.mp4", thirdSource, changedConfig);
+  ASSERT_NE(third, nullptr);
+  third->requestThumbnail(1'300'000, [](Thumbnail) {});
+  EXPECT_EQ(thirdSource->requests(), 1);
+  third->cancel();
+
   first->cancel();
   second->cancel();
   std::filesystem::remove_all(directory);

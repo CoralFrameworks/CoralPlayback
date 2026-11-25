@@ -31,6 +31,13 @@ struct DiskThumbnailCacheConfig {
   /** Directory that stores the thumbnails. It is created when missing. */
   std::string directory;
 
+  /**
+   * Optional media identity, e.g. the file's size and modification time or an HTTP ETag. It is
+   * mixed into the cache key, so changing the media does not reuse thumbnails from the old bytes.
+   * Empty keeps the key at {@code mediaKey} alone.
+   */
+  std::string mediaFingerprint;
+
   /** Width of the cache bucket in microseconds. Zero selects 500 ms. */
   int64_t bucketUs = 500'000;
 

@@ -176,7 +176,7 @@ struct DiskThumbnailProvider::State {
       : mediaKey(std::move(key)), provider(std::move(source)), config(std::move(tuning)) {
     config.bucketUs = normalizeBucket(config.bucketUs);
     directory = config.directory;
-    hash = fnv1a(mediaKey);
+    hash = fnv1a(mediaKey + "\n" + config.mediaFingerprint);
   }
 
   std::filesystem::path pathFor(const int64_t bucket) const {
