@@ -66,3 +66,12 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# IDE and macOS metadata
+.DS_Store
+.idea/
+.vscode/
+
+# Dependency checkouts fetched by scripts/bootstrap.sh (declared in .gitmodules, not tracked)
+external/
+third_party/
