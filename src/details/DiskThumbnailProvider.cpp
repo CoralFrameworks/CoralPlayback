@@ -142,18 +142,22 @@ bool saveFrame(const std::filesystem::path& path, const Thumbnail& thumbnail) {
   return true;
 }
 
-void prune(const std::filesystem::path& directory, const size_t maxFiles) {
-  if (maxFiles == 0) {
+void prune(const std::filesystem::path& directory, const size_t maxFiles,
+           const uint64_t maxBytes) {
+  if (maxFiles == 0 && maxBytes == 0) {
     return;
   }
   std::error_code error;
   std::vector<std::filesystem::directory_entry> files;
+  uint64_t totalBytes = 0;
   for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
     if (entry.is_regular_file() && entry.path().extension() == ".thumb") {
+      totalBytes += entry.file_size(error);
+      error.clear();
       files.push_back(entry);
     }
   }
-  if (error || files.size() <= maxFiles) {
+  if (error) {
     return;
   }
   std::sort(files.begin(), files.end(), [](const auto& lhs, const auto& rhs) {
@@ -162,9 +166,19 @@ void prune(const std::filesystem::path& directory, const size_t maxFiles) {
     return std::filesystem::last_write_time(lhs, lhsError) <
            std::filesystem::last_write_time(rhs, rhsError);
   });
-  for (size_t index = 0; index + maxFiles < files.size(); ++index) {
-    std::filesystem::remove(files[index], error);
+  size_t index = 0;
+  while (!files.empty() &&
+         ((maxFiles > 0 && files.size() > maxFiles) ||
+          (maxBytes > 0 && totalBytes > maxBytes))) {
+    const uint64_t size = files[index].file_size(error);
     error.clear();
+    if (std::filesystem::remove(files[index], error)) {
+      totalBytes = size <= totalBytes ? totalBytes - size : 0;
+      files.erase(files.begin());
+    } else {
+      error.clear();
+      ++index;
+    }
   }
 }
 
@@ -211,7 +225,7 @@ struct DiskThumbnailProvider::State {
     }
     if (writeDisk && thumbnail.frame != nullptr) {
       saveFrame(pathFor(bucket), thumbnail);
-      prune(directory, config.maxFiles);
+      prune(directory, config.maxFiles, config.maxBytes);
     }
     for (auto& callback : callbacks) {
       if (callback) {

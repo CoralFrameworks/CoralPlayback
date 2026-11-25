@@ -43,6 +43,9 @@ struct DiskThumbnailCacheConfig {
 
   /** Maximum number of `.thumb` files kept; the oldest are removed after a write. Zero keeps all. */
   size_t maxFiles = 512;
+
+  /** Maximum total bytes of `.thumb` files kept. Zero keeps all. */
+  uint64_t maxBytes = 0;
 };
 
 /**

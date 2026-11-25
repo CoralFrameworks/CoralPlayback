@@ -111,6 +111,31 @@ TEST(DiskThumbnailProviderTest, ServesANewProviderFromDisk) {
   EXPECT_EQ(thirdSource->requests(), 1);
   third->cancel();
 
+  // A total-byte budget evicts the oldest frames even when the file count is unlimited.
+  const auto byteDirectory = std::filesystem::temp_directory_path() /
+    ("coral-thumb-bytes-" + std::to_string(
+      std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::remove_all(byteDirectory);
+  DiskThumbnailCacheConfig byteConfig;
+  byteConfig.directory = byteDirectory.string();
+  byteConfig.bucketUs = 500'000;
+  byteConfig.maxFiles = 0;
+  byteConfig.maxBytes = 100;
+  auto byteSource = std::make_shared<FakeThumbnailProvider>();
+  auto byteProvider = DiskThumbnailProvider::create("file:///byte-video.mp4", byteSource, byteConfig);
+  ASSERT_NE(byteProvider, nullptr);
+  byteProvider->requestThumbnail(0, [](Thumbnail) {});
+  byteProvider->requestThumbnail(1'000'000, [](Thumbnail) {});
+  size_t byteFiles = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(byteDirectory)) {
+    if (entry.path().extension() == ".thumb") {
+      ++byteFiles;
+    }
+  }
+  EXPECT_LE(byteFiles, 1u);
+  byteProvider->cancel();
+  std::filesystem::remove_all(byteDirectory);
+
   first->cancel();
   second->cancel();
   std::filesystem::remove_all(directory);
