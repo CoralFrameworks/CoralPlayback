@@ -764,6 +764,14 @@ void AvLivePlayer::stop() {
 }
 
 void AvLivePlayer::release() {
+  std::shared_ptr<ThumbnailProvider> provider;
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    provider = std::move(thumbnailProvider);
+  }
+  if (provider != nullptr) {
+    provider->cancel();
+  }
 
   if (released || !msgThread || !msgThread->isAlive()) {
     return;
@@ -1606,6 +1614,34 @@ VideoColorInfo AvLivePlayer::getVideoColorInfo() const {
 std::vector<Chapter> AvLivePlayer::getChapters() const {
   const std::lock_guard<Mutex> lock(outputLock);
   return chapters;
+}
+
+void AvLivePlayer::setThumbnailProvider(std::shared_ptr<ThumbnailProvider> provider) {
+  std::shared_ptr<ThumbnailProvider> previous;
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    previous = std::move(thumbnailProvider);
+    thumbnailProvider = std::move(provider);
+  }
+  if (previous != nullptr) {
+    previous->cancel();
+  }
+}
+
+std::shared_ptr<ThumbnailProvider> AvLivePlayer::getThumbnailProvider() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return thumbnailProvider;
+}
+
+void AvLivePlayer::requestThumbnail(const int64_t positionUs, ThumbnailProvider::Callback callback) {
+  std::shared_ptr<ThumbnailProvider> provider;
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    provider = thumbnailProvider;
+  }
+  if (provider != nullptr) {
+    provider->requestThumbnail(positionUs, std::move(callback));
+  }
 }
 
 void AvLivePlayer::onVideoFrameRendered(std::shared_ptr<Fence> fence) {

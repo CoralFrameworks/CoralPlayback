@@ -20,6 +20,7 @@
 #include <coral/playback/MetadataOutput.h>
 #include <coral/playback/Parameters.h>
 #include <coral/playback/TextOutput.h>
+#include <coral/playback/Thumbnail.h>
 #include <coral/playback/Tracks.h>
 #include <coral/playback/VideoFrameOutput.h>
 #include <coral/playback/Volume.h>
@@ -258,6 +259,26 @@ public:
   /** Returns the chapters of the current media item, or an empty list when it has none. */
   [[nodiscard]] virtual std::vector<Chapter> getChapters() const {
     return {};
+  }
+
+  /**
+   * Installs the provider used by {@link requestThumbnail}, or clears it.
+   *
+   * <p>The provider is application/platform code; the player only calls it and cancels it when it is
+   * released. A null provider disables thumbnail requests.
+   */
+  virtual void setThumbnailProvider(std::shared_ptr<ThumbnailProvider> provider) {
+    static_cast<void>(provider);
+  }
+
+  [[nodiscard]] virtual std::shared_ptr<ThumbnailProvider> getThumbnailProvider() const {
+    return nullptr;
+  }
+
+  /** Requests one thumbnail from the installed provider. Does nothing without one. */
+  virtual void requestThumbnail(int64_t positionUs, ThumbnailProvider::Callback callback) {
+    static_cast<void>(positionUs);
+    static_cast<void>(callback);
   }
 
   /**

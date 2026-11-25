@@ -55,6 +55,7 @@ add_executable(${TARGET}
     test_MetadataRenderer.cpp
     test_LottieOverlayNode.cpp
     test_TextRenderer.cpp
+    test_ThumbnailProvider.cpp
     test_ProgressiveMediaSource.cpp
     test_SilenceMediaSource.cpp
     test_SubtitleTracks.cpp

@@ -184,6 +184,18 @@ std::vector<Chapter> LivePlayer::getChapters() const {
   return mImpl->getChapters();
 }
 
+void LivePlayer::setThumbnailProvider(std::shared_ptr<ThumbnailProvider> provider) {
+  mImpl->setThumbnailProvider(std::move(provider));
+}
+
+std::shared_ptr<ThumbnailProvider> LivePlayer::getThumbnailProvider() const {
+  return mImpl->getThumbnailProvider();
+}
+
+void LivePlayer::requestThumbnail(const int64_t positionUs, ThumbnailProvider::Callback callback) {
+  mImpl->requestThumbnail(positionUs, std::move(callback));
+}
+
 void LivePlayer::selectTrack(int rendererIndex, int groupIndex, int trackIndex) {
   mImpl->selectTrack(rendererIndex, groupIndex, trackIndex);
 }

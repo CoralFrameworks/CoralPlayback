@@ -305,6 +305,7 @@ set(PUBLIC_HDRS
     coral/playback/Renderer.h
     coral/playback/StandaloneClock.h
     coral/playback/TextOutput.h
+    coral/playback/Thumbnail.h
     coral/playback/TimedFormatQueue.h
     coral/playback/Tracks.h
     coral/playback/VideoColorInfo.h
