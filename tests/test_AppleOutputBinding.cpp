@@ -861,6 +861,9 @@ TEST(AppleLivePlayerEffectTest, SamplesTheDecodersSurfaceThroughTheAppleSink) {
   EXPECT_NE(frameOutput.surface, nullptr);
   EXPECT_GT(frameOutput.sequence, 0u);
   EXPECT_GE(frameOutput.positionUs, 0);
+  ASSERT_NE(frameOutput.fence, nullptr);
+  EXPECT_NE(frameOutput.fence->wait(coral::Fence::Mode::kDontFlush, 2'000'000'000ull),
+            coral::Fence::Status::kTimeoutExpired);
   EXPECT_GE(player->getBufferedPositionUs(), player->getCurrentPositionUs());
   const auto bufferedRanges = player->getBufferedRanges();
   if (player->getBufferedPositionUs() > player->getCurrentPositionUs()) {

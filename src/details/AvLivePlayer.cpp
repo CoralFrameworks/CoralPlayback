@@ -208,7 +208,10 @@ void AvLivePlayer::enableVideoEffectPipeline(const std::shared_ptr<VideoOutputNo
 
   effectEngine = EffectEngine::create(config);
   if (effectEngine != nullptr) {
-    effectEngine->setOnAfterFrame([this](backend::Device&) { onVideoFrameRendered(); });
+    effectEngine->setOnFrameSubmitted(
+      [this](backend::Device&, std::shared_ptr<Fence> fence) {
+        onVideoFrameRendered(std::move(fence));
+      });
   }
   const std::shared_ptr<EffectInputNode> graphInput = resolved.inputNode;
   const std::shared_ptr<NullOutputNode> nullOutput = NullOutputNode::create();
@@ -1549,11 +1552,12 @@ VideoFrameOutput AvLivePlayer::getVideoFrameOutput() const {
   return videoFrameOutput;
 }
 
-void AvLivePlayer::onVideoFrameRendered() {
+void AvLivePlayer::onVideoFrameRendered(std::shared_ptr<Fence> fence) {
   const auto positionUs = pendingVideoFramePositionUs.load(std::memory_order_relaxed);
   const std::lock_guard<Mutex> lock(outputLock);
   videoFrameOutput.surface = pendingOutputSurface;
   videoFrameOutput.positionUs = positionUs;
+  videoFrameOutput.fence = std::move(fence);
   ++videoFrameOutput.sequence;
 }
 

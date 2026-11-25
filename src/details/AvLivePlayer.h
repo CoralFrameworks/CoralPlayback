@@ -407,7 +407,7 @@ private:
   void applyVideoEffectSurface(const std::shared_ptr<VideoSurface>& surface);
 
   /** Runs on the engine's render thread after a frame; updates the UI hand-off sequence. */
-  void onVideoFrameRendered();
+  void onVideoFrameRendered(std::shared_ptr<Fence> fence);
 
   void setVideoScalingModeInternal(const Message* msg);
 

@@ -43,8 +43,8 @@ namespace coral {
  * surface. The caller must keep the device alive for the source's lifetime and must call the source
  * only while that device's context is current.
  *
- * <p>This version has no frame fence: the caller should sample it with its own in-flight slots, or
- * after the player's engine has completed the frame. A fence-carrying variant is a later addition.
+ * <p>The caller should wait on {@link VideoFrameOutput::fence} before sampling the surface. The
+ * source only imports the image; it does not wait for the player's GPU work.
  */
 class AppleVideoFrameSource final {
 public:

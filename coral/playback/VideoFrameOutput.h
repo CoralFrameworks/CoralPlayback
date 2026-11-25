@@ -19,6 +19,8 @@
 
 #include <codec/MediaCodec.h>
 
+#include <effect/Fence.h>
+
 #include <cstdint>
 #include <memory>
 
@@ -46,6 +48,12 @@ struct VideoFrameOutput {
 
   /** Monotonically increasing render counter; zero means no frame has been rendered yet. */
   uint64_t sequence = 0;
+
+  /**
+   * Signals when the GPU work for this frame completed; null when the engine could not provide one.
+   * A bridge waits on it before sampling the surface.
+   */
+  std::shared_ptr<Fence> fence;
 };
 
 } // namespace coral
