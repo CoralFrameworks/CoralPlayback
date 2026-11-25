@@ -208,6 +208,22 @@ std::string LivePlayer::getPreferredTextLanguage() const {
   return mImpl->getPreferredTextLanguage();
 }
 
+void LivePlayer::setPreferredTextRoleFlags(const int roleFlags) {
+  mImpl->setPreferredTextRoleFlags(roleFlags);
+}
+
+int LivePlayer::getPreferredTextRoleFlags() const {
+  return mImpl->getPreferredTextRoleFlags();
+}
+
+void LivePlayer::setSelectUndeterminedTextLanguage(const bool select) {
+  mImpl->setSelectUndeterminedTextLanguage(select);
+}
+
+bool LivePlayer::getSelectUndeterminedTextLanguage() const {
+  return mImpl->getSelectUndeterminedTextLanguage();
+}
+
 void LivePlayer::selectTrack(int rendererIndex, int groupIndex, int trackIndex) {
   mImpl->selectTrack(rendererIndex, groupIndex, trackIndex);
 }

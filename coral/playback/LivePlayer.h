@@ -167,6 +167,14 @@ public:
 
   [[nodiscard]] std::string getPreferredTextLanguage() const override;
 
+  void setPreferredTextRoleFlags(int roleFlags) override;
+
+  [[nodiscard]] int getPreferredTextRoleFlags() const override;
+
+  void setSelectUndeterminedTextLanguage(bool select) override;
+
+  [[nodiscard]] bool getSelectUndeterminedTextLanguage() const override;
+
   void selectTrack(int rendererIndex, int groupIndex, int trackIndex) override;
 
   void clearTrackSelection(int rendererIndex) override;

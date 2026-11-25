@@ -947,8 +947,12 @@ TEST(AppleLivePlayerEffectTest, SelectsThePreferredSubtitleLanguage) {
   ASSERT_NE(player, nullptr);
   player->setPreferredAudioLanguage("eng");
   player->setPreferredTextLanguage("zh");
+  player->setPreferredTextRoleFlags(1);
+  player->setSelectUndeterminedTextLanguage(false);
   EXPECT_EQ(player->getPreferredAudioLanguage(), "eng");
   EXPECT_EQ(player->getPreferredTextLanguage(), "zh");
+  EXPECT_EQ(player->getPreferredTextRoleFlags(), 1);
+  EXPECT_FALSE(player->getSelectUndeterminedTextLanguage());
   player->prepare();
   ASSERT_TRUE(waitFor([&] {
     return player->getPlaybackState() == coral::Player::State::STATE_READY ||

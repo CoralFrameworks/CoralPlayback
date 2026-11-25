@@ -299,6 +299,30 @@ public:
   }
 
   /**
+   * Sets the preferred text role flags (forced, caption, commentary, ...). The selector uses them
+   * as a preference, not as a hard filter; zero clears the preference.
+   */
+  virtual void setPreferredTextRoleFlags(int roleFlags) {
+    static_cast<void>(roleFlags);
+  }
+
+  [[nodiscard]] virtual int getPreferredTextRoleFlags() const {
+    return 0;
+  }
+
+  /**
+   * Whether a text track with no language may be selected when no preferred language matches.
+   * Defaults to true.
+   */
+  virtual void setSelectUndeterminedTextLanguage(bool select) {
+    static_cast<void>(select);
+  }
+
+  [[nodiscard]] virtual bool getSelectUndeterminedTextLanguage() const {
+    return true;
+  }
+
+  /**
    * Returns the tracks of the current media item and the current selection.
    *
    * <p>An empty value is returned before the first period is prepared. The default implementation

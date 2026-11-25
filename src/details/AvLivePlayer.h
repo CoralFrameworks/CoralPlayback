@@ -137,6 +137,14 @@ public:
 
   [[nodiscard]] std::string getPreferredTextLanguage() const override;
 
+  void setPreferredTextRoleFlags(int roleFlags) override;
+
+  [[nodiscard]] int getPreferredTextRoleFlags() const override;
+
+  void setSelectUndeterminedTextLanguage(bool select) override;
+
+  [[nodiscard]] bool getSelectUndeterminedTextLanguage() const override;
+
   void selectTrack(int rendererIndex, int groupIndex, int trackIndex) override;
 
   void clearTrackSelection(int rendererIndex) override;
@@ -699,6 +707,7 @@ private:
   std::string preferredAudioLanguage;
   std::string preferredTextLanguage;
   bool selectUndeterminedTextLanguage = true;
+  int preferredTextRoleFlags = 0;
   std::atomic<bool> subtitlesEnabled{true};
   std::shared_ptr<MetadataOutput> metadataOutput;
   /** The renderer of the application, before the subtitle overlay wraps it. */

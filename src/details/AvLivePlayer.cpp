@@ -1032,16 +1032,19 @@ bool AvLivePlayer::handleMessage(Message* msg) {
     case MSG_SET_PREFERRED_TEXT_LANGUAGE: {
       std::string language;
       bool selectUndetermined = true;
+      int roleFlags = 0;
       {
         std::lock_guard<Mutex> lock(outputLock);
         language = preferredTextLanguage;
         selectUndetermined = selectUndeterminedTextLanguage;
+        roleFlags = preferredTextRoleFlags;
       }
       if (auto selector = std::dynamic_pointer_cast<DefaultTrackSelector>(trackSelector);
           selector != nullptr) {
         auto parameters = selector->getParameters();
         parameters.preferredTextLanguage = language;
         parameters.selectUndeterminedTextLanguage = selectUndetermined;
+        parameters.preferredTextRoleFlags = roleFlags;
         selector->setParameters(parameters);
       }
       // Queue the reselection after any seek that is already queued: the seek must apply the new
@@ -1667,6 +1670,36 @@ std::string AvLivePlayer::getPreferredAudioLanguage() const {
 std::string AvLivePlayer::getPreferredTextLanguage() const {
   const std::lock_guard<Mutex> lock(outputLock);
   return preferredTextLanguage;
+}
+
+void AvLivePlayer::setPreferredTextRoleFlags(const int roleFlags) {
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    preferredTextRoleFlags = roleFlags;
+  }
+  if (msgHandler != nullptr) {
+    msgHandler->sendEmptyMessage(MSG_SET_PREFERRED_TEXT_LANGUAGE);
+  }
+}
+
+int AvLivePlayer::getPreferredTextRoleFlags() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return preferredTextRoleFlags;
+}
+
+void AvLivePlayer::setSelectUndeterminedTextLanguage(const bool select) {
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    selectUndeterminedTextLanguage = select;
+  }
+  if (msgHandler != nullptr) {
+    msgHandler->sendEmptyMessage(MSG_SET_PREFERRED_TEXT_LANGUAGE);
+  }
+}
+
+bool AvLivePlayer::getSelectUndeterminedTextLanguage() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return selectUndeterminedTextLanguage;
 }
 
 void AvLivePlayer::requestThumbnail(const int64_t positionUs, ThumbnailProvider::Callback callback) {
