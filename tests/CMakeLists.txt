@@ -46,6 +46,7 @@ add_executable(${TARGET}
     test_AnalyticsCollector.cpp
     test_AudioPlayback.cpp
     test_AvLivePlayer.cpp
+    test_ChapterThumbnailProvider.cpp
     test_DefaultLoadControl.cpp
     test_DefaultProgressiveMediaExtractor.cpp
     test_MediaSourceList.cpp

@@ -292,6 +292,7 @@ set(CORAL_PLAYBACK_TARGET playback)
 set(CORAL_PLAYBACK_PUBLIC_HDR_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 set(PUBLIC_HDRS
+    coral/playback/ChapterThumbnailProvider.h
     coral/playback/Chapters.h
     coral/playback/DefaultMediaClock.h
     coral/playback/LivePlayer.h
@@ -416,6 +417,7 @@ set(SRCS
     src/details/AvLivePlayer.h
     src/details/BaseRenderer.cpp
     src/details/BaseRenderer.h
+    src/details/ChapterThumbnailProvider.cpp
     src/details/CpuVideoFrameSink.cpp
     src/details/CpuVideoFrameSink.h
     src/details/DecodeAudioRenderer.cpp
