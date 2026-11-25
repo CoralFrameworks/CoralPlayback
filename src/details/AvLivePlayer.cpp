@@ -529,6 +529,15 @@ void AvLivePlayer::setMediaItem(const std::shared_ptr<MediaItem>& mediaItem) {
   setMediaSource(factory->createMediaSource(mediaItem));
 }
 
+void AvLivePlayer::setShuffleModeEnabled(const bool enabled) {
+  msgHandler->sendMessage(
+    Message::obtain(msgHandler, MSG_SET_SHUFFLE_MODE, WrapMessageData(enabled)));
+}
+
+bool AvLivePlayer::getShuffleModeEnabled() const {
+  return shuffleModeEnabled;
+}
+
 void AvLivePlayer::setRepeatMode(const RepeatMode mode) {
   msgHandler->sendMessage(Message::obtain(msgHandler, MSG_SET_REPEAT_MODE, WrapMessageData(mode)));
 }
@@ -1132,6 +1141,16 @@ bool AvLivePlayer::handleMessage(Message* msg) {
     case MSG_REMOVE_MEDIA_SOURCE_EVENT_LISTENER: {
       handleRemoveMediaSourceEventListener(
         UseSharedMsgData<MediaSourceEventListener>(msg->msgData));
+      break;
+    }
+    case MSG_SET_SHUFFLE_MODE: {
+      const bool enabled = UseMessageData<bool>(msg->msgData);
+      if (shuffleModeEnabled != enabled) {
+        shuffleModeEnabled = enabled;
+        dispatchPlayerEvent([enabled](EventListener& listener) {
+          listener.onShuffleModeEnabledChanged(enabled);
+        });
+      }
       break;
     }
     case MSG_SET_REPEAT_MODE: {

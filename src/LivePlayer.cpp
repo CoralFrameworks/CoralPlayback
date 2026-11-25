@@ -340,6 +340,14 @@ const RepeatMode& LivePlayer::getRepeatMode() const {
   return mImpl->getRepeatMode();
 }
 
+void LivePlayer::setShuffleModeEnabled(const bool enabled) {
+  mImpl->setShuffleModeEnabled(enabled);
+}
+
+bool LivePlayer::getShuffleModeEnabled() const {
+  return mImpl->getShuffleModeEnabled();
+}
+
 bool LivePlayer::isLoading() const {
   return mImpl->isLoading();
 }

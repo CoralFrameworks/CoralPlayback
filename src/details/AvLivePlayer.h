@@ -213,6 +213,10 @@ public:
     return repeatMode;
   }
 
+  void setShuffleModeEnabled(bool enabled) override;
+
+  [[nodiscard]] bool getShuffleModeEnabled() const override;
+
   [[nodiscard]] bool isLoading() const override {
     return playbackInfo.isLoading;
   }
@@ -843,6 +847,7 @@ private:
   static constexpr int MSG_SEEK_TO_MEDIA_ITEM = 33;
   static constexpr int MSG_SEEK_TO_NEXT_MEDIA_ITEM = 34;
   static constexpr int MSG_SEEK_TO_PREVIOUS_MEDIA_ITEM = 35;
+  static constexpr int MSG_SET_SHUFFLE_MODE = 36;
 
   static constexpr int64_t ACTIVE_INTERVAL_MS = 10;
   static constexpr int64_t IDLE_INTERVAL_MS = 1000;

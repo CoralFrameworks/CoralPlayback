@@ -121,6 +121,18 @@ private:
   float pitch_ = 0.0f;
 };
 
+/** Records the shuffle-mode events delivered on the playback thread. */
+class RecordingShuffleListener final : public Player::EventListener {
+public:
+  void onShuffleModeEnabledChanged(const bool enabled) override {
+    value.store(enabled, std::memory_order_release);
+    seen.store(true, std::memory_order_release);
+  }
+
+  std::atomic<bool> value{false};
+  std::atomic<bool> seen{false};
+};
+
 // ==================================================================================================
 
 TEST(AvLivePlayerTest, StartsAndStopsTheEffectPipeline) {
@@ -249,6 +261,31 @@ TEST(AvLivePlayerTest, NavigatesAPlaylist) {
   player->seekToMediaItem(1);
   ASSERT_TRUE(waitFor([&] { return player->getCurrentMediaItemIndex() == 1; }, kTimeout))
       << "seekToMediaItem did not move to the requested item";
+  player->release();
+}
+
+TEST(AvLivePlayerTest, TogglesShuffleModeAndReportsIt) {
+  auto player = createPlayerWithoutRenderers();
+  auto listener = std::make_shared<RecordingShuffleListener>();
+  player->addListener(listener);
+  player->prepare();
+  ASSERT_TRUE(waitFor(
+      [&] { return player->getPlaybackState() != Player::State::STATE_IDLE; }, kTimeout));
+  ASSERT_EQ(player->getCurrentMediaItemIndex(), 0);
+  player->addMediaItem(MediaItem::fromUrl("silence://second"));
+  ASSERT_TRUE(waitFor([&] { return player->getMediaItemCount() == 2; }, kTimeout));
+  EXPECT_FALSE(player->getShuffleModeEnabled());
+
+  player->setShuffleModeEnabled(true);
+  ASSERT_TRUE(waitFor([&] { return player->getShuffleModeEnabled(); }, kTimeout));
+  ASSERT_TRUE(waitFor([&] { return listener->seen.load(std::memory_order_acquire); }, kTimeout));
+  EXPECT_TRUE(listener->value.load(std::memory_order_acquire));
+  EXPECT_NE(player->getNextMediaItemIndex(), -1);
+
+  player->setShuffleModeEnabled(false);
+  ASSERT_TRUE(waitFor([&] { return !player->getShuffleModeEnabled(); }, kTimeout));
+  EXPECT_EQ(player->getNextMediaItemIndex(), 1);
+  player->removeListener(listener);
   player->release();
 }
 

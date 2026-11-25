@@ -304,6 +304,10 @@ public:
    */
   [[nodiscard]] const RepeatMode& getRepeatMode() const override;
 
+  void setShuffleModeEnabled(bool enabled) override;
+
+  [[nodiscard]] bool getShuffleModeEnabled() const override;
+
   /**
    * Whether the player is currently loading the source.
    */

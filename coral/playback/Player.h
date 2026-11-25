@@ -115,6 +115,9 @@ public:
     /** Called when the repeat mode changed. */
     virtual void onRepeatModeChanged(const RepeatMode& repeatMode) {}
 
+    /** Called when shuffle mode was enabled or disabled. */
+    virtual void onShuffleModeEnabledChanged(bool shuffleModeEnabled) {}
+
     /** Called when the volume changed. */
     virtual void onVolumeChanged(float volume) {}
 
@@ -507,6 +510,15 @@ public:
    * Returns the current {@link RepeatMode} used for playback.
    */
   [[nodiscard]] virtual const RepeatMode& getRepeatMode() const = 0;
+
+  /** Enables or disables playlist shuffling. The current item does not change immediately. */
+  virtual void setShuffleModeEnabled(bool enabled) {
+    static_cast<void>(enabled);
+  }
+
+  [[nodiscard]] virtual bool getShuffleModeEnabled() const {
+    return false;
+  }
 
   /**
    * Whether the player is currently loading the source.
