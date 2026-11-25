@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <coral/playback/LivePlayer.h>
 #include <coral/playback/VideoOutput.h>
 #include <coral/playback/win32/Win32TextureSurface.h>
 #include <coral/playback/win32/Win32WindowSurface.h>
@@ -26,8 +27,25 @@
 #include <d3d11.h>
 #include <windows.h>
 
+#include <chrono>
+#include <functional>
+#include <thread>
+
 namespace coral {
 namespace {
+
+using namespace std::chrono_literals;
+
+bool waitForFrame(const std::function<bool()>& predicate, const std::chrono::milliseconds timeout) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (predicate()) {
+      return true;
+    }
+    std::this_thread::sleep_for(5ms);
+  }
+  return predicate();
+}
 
 HWND createHiddenWindow() {
   constexpr char kClassName[] = "CoralPlaybackOutputBindingTest";
@@ -141,6 +159,46 @@ TEST(WindowsTextureOutputFactoryTest, CreatesTheSharedTextureOutput) {
   EXPECT_TRUE(factory.querySize(surface, &width, &height));
   EXPECT_EQ(width, 64u);
   EXPECT_EQ(height, 48u);
+  surface->release();
+  device->Release();
+}
+
+TEST(WindowsTexturePlayerEffectTest, RendersIntoTheSharedTextureRing) {
+  ID3D11Device* const device = createD3d11Device();
+  if (device == nullptr) {
+    GTEST_SKIP() << "no D3D11 hardware device on this host";
+  }
+  const auto surface = Win32TextureSurface::create(device, 320, 180);
+  ASSERT_NE(surface, nullptr);
+
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/video720p_5s.mp4";
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  player->enableVideoEffectPipeline(std::make_shared<WindowsTextureOutputNodeFactory>());
+  ASSERT_TRUE(player->isVideoEffectPipelineEnabled());
+  player->setOutputSurface(surface);
+  const auto engine = player->getEffectEngine();
+  ASSERT_NE(engine, nullptr);
+  player->prepare();
+  ASSERT_TRUE(waitForFrame([&] {
+    return player->getPlaybackState() == coral::Player::State::STATE_READY ||
+           !player->getPlaybackErrorMessage().empty();
+  }, 10s)) << player->getPlaybackErrorMessage();
+  if (!player->getPlaybackErrorMessage().empty()) {
+    player->release();
+    device->Release();
+    GTEST_SKIP() << player->getPlaybackErrorMessage();
+  }
+  player->play();
+  if (!waitForFrame([&] { return engine->isRunning(); }, 5s)) {
+    player->release();
+    device->Release();
+    GTEST_SKIP() << engine->diagnostics();
+  }
+  EXPECT_TRUE(waitForFrame([&] { return surface->currentTexture() != nullptr; }, 15s))
+      << "the player never wrote into the shared D3D11 ring";
+  EXPECT_NE(surface->outputNode(), nullptr);
+  player->release();
   surface->release();
   device->Release();
 }
