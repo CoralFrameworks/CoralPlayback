@@ -39,11 +39,19 @@ constexpr size_t kConversionSlotCount = 3;
 bool isNv12(const CVPixelBufferRef buffer) {
   const auto format = CVPixelBufferGetPixelFormatType(buffer);
   return format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
-         format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+         format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange ||
+         format == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange ||
+         format == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange;
 }
 
 bool isBgra(const CVPixelBufferRef buffer) {
   return CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_32BGRA;
+}
+
+bool isP010(const CVPixelBufferRef buffer) {
+  const auto format = CVPixelBufferGetPixelFormatType(buffer);
+  return format == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange ||
+         format == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange;
 }
 
 void applyColorInfo(const ColorInfo& color, PixelBufferView* view) {
@@ -231,7 +239,8 @@ std::shared_ptr<void> retainPixelBuffer(const CVPixelBufferRef buffer) {
 PixelBufferView makeView(const IOSurfaceRef surface, const uint32_t width, const uint32_t height,
                          const int64_t positionUs, const ColorInfo& color,
                          std::shared_ptr<void> lifetime,
-                         const EffectPixelFormat format = EffectPixelFormat::BGRA8) {
+                         const EffectPixelFormat format = EffectPixelFormat::BGRA8,
+                         const bool p010 = false) {
   PixelBufferView view;
   view.width = width;
   view.height = height;
@@ -242,6 +251,11 @@ PixelBufferView makeView(const IOSurfaceRef surface, const uint32_t width, const
   view.nativeKind = NativeHandleKind::IOSurface;
   view.nativeHandle = surface;
   view.source = EffectFrameSource::HardwareBuffer;
+  view.p010 = p010;
+  view.hdrMaxContentLightLevel = color.hdrStaticInfo.size() >= 25
+    ? static_cast<uint32_t>((color.hdrStaticInfo[21] << 8) | color.hdrStaticInfo[22]) : 0;
+  view.hdrMaxFrameAverageLightLevel = color.hdrStaticInfo.size() >= 25
+    ? static_cast<uint32_t>((color.hdrStaticInfo[23] << 8) | color.hdrStaticInfo[24]) : 0;
   view.timestamp = RenderTime::fromTicks(positionUs, 1'000'000);
   view.lifetime = std::move(lifetime);
   applyColorInfo(color, &view);
@@ -352,12 +366,15 @@ bool AppleVideoFrameSink::submit(std::shared_ptr<AVPixelBuffer> frame, const int
   const auto width = static_cast<uint32_t>(CVPixelBufferGetWidth(source));
   const auto height = static_cast<uint32_t>(CVPixelBufferGetHeight(source));
 
-  // Metal can import the two NV12 planes directly. The input node converts them in one GPU pass, and
-  // the decoder's own surface is what is sampled, so no conversion ring is involved.
+  // Metal can import the two 8-bit NV12 planes or the two 10-bit P010 planes directly. The input
+  // node converts and tone-maps them in one GPU pass, and the decoder's own surface is sampled, so
+  // no conversion ring is involved. An 8-bit HDR frame (which VideoToolbox should not produce) still
+  // goes through the BGRA conversion fallback.
   const bool hdr = color.colorSpace == ColorInfo::SpaceType::kSpaceBT2020 &&
                    (color.colorTransfer == ColorInfo::TransferType::kTransferST2084 ||
                     color.colorTransfer == ColorInfo::TransferType::kTransferHLG);
-  if (mState->backend == EffectBackend::Metal && !hdr) {
+  const bool p010 = isP010(source);
+  if (mState->backend == EffectBackend::Metal && (p010 || !hdr)) {
     IOSurfaceRef surface = CVPixelBufferGetIOSurface(source);
     if (surface == nullptr) {
       mState->dropped.fetch_add(1, std::memory_order_relaxed);
@@ -365,7 +382,8 @@ bool AppleVideoFrameSink::submit(std::shared_ptr<AVPixelBuffer> frame, const int
       return false;
     }
     const PixelBufferView view = makeView(surface, width, height, positionUs, color,
-                                          retainPixelBuffer(source), EffectPixelFormat::YUV420);
+                                          retainPixelBuffer(source), EffectPixelFormat::YUV420,
+                                          p010);
     if (mState->input->submit(view) != EffectResult::Success) {
       // The token releases the surface; the conversion ring has no frame left to fall back on, so
       // this failure is reported as a drop.

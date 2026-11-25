@@ -855,6 +855,50 @@ TEST(AppleLivePlayerEffectTest, ReportsAndSelectsSideLoadedSubtitleTracks) {
   player->release();
 }
 
+TEST(AppleLivePlayerEffectTest, PlaysHdr10AndReportsItsColorInfo) {
+  const char* const asset = std::getenv("CORAL_HDR_ASSET");
+  if (asset == nullptr || !std::filesystem::exists(asset)) {
+    GTEST_SKIP() << "set CORAL_HDR_ASSET to an HDR10/PQ file to run this test";
+  }
+  auto player = LivePlayer::create(std::string(asset), LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  const auto surface = AppleIOSurface::create(320, 180, EffectPixelFormat::BGRA8);
+  ASSERT_NE(surface, nullptr);
+  const auto effectInput = AppleVideoInput::createZeroCopyInput(320, 180);
+  ASSERT_NE(effectInput.inputNode, nullptr);
+  ASSERT_NE(effectInput.decoderSurface, nullptr);
+  ASSERT_NE(effectInput.frameSink, nullptr);
+  const auto appleSink = std::dynamic_pointer_cast<AppleVideoFrameSink>(effectInput.frameSink);
+  ASSERT_NE(appleSink, nullptr);
+  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
+  player->setOutputSurface(surface);
+  const auto engine = player->getEffectEngine();
+  ASSERT_NE(engine, nullptr);
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] { return probe->ready() || probe->failed(); }, 10s))
+      << "the player never became ready";
+  ASSERT_FALSE(probe->failed()) << probe->error();
+  player->play();
+  ASSERT_TRUE(waitFor([&] { return probe->videoColorSeen(); }, 15s))
+      << "the HDR decoder never reported its colour info";
+  const auto color = player->getVideoColorInfo();
+  EXPECT_TRUE(color.isHdr());
+  EXPECT_EQ(color.primaries, coral::VideoColorPrimaries::BT2020);
+  EXPECT_TRUE(color.transfer == coral::VideoColorTransfer::PQ ||
+              color.transfer == coral::VideoColorTransfer::HLG);
+  EXPECT_TRUE(waitFor([&] { return engine->stats().frameCount > 0; }, 15s))
+      << "the HDR file never reached the effect output: " << engine->diagnostics();
+  EXPECT_GT(appleSink->submittedFrameCount(), 0u)
+      << "the HDR decoder frame never reached the Apple sink";
+  EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+  const auto pixel = centrePixel(surface->iosurface());
+  EXPECT_TRUE(pixel != std::vector<uint8_t>({0, 0, 0, 0}))
+      << "the HDR tone-map did not reach the SDR output surface";
+  player->release();
+}
+
 // ==================================================================================================
 // The player drives the IOSurface output
 // ==================================================================================================
