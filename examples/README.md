@@ -20,11 +20,12 @@ public pieces a macOS/iOS host supplies:
   surface, the Apple `VideoFrameSink` and the `AppleIOSurfaceInputNode`.
 
 Zero-copy is the default. `AppleHardwareVideoSurface` asks VideoToolbox for IOSurface-backed frames;
-`AppleVideoFrameSink` converts the decoder's NV12 surface to a BGRA IOSurface on the GPU (a small
-conversion ring) and publishes it to `AppleIOSurfaceInputNode`, so the pixels never visit the CPU.
-The graph composes the frame and `AppleIOSurfaceOutputNode` copies the final image into the output
-surface on the GPU. The window is a layer-backed `NSView`: its `CALayer.contents` is the surface, so
-presenting a frame costs one property assignment and no pixel copy.
+`AppleVideoFrameSink` asks the decoder for BGRA through `MediaFormat::processFormat`, so the decoder's
+own IOSurface goes straight to `AppleIOSurfaceInputNode` and the pixels never visit the CPU. A decoder
+that keeps NV12 falls back to a GPU NV12-to-BGRA conversion ring in the sink. The graph composes the
+frame and `AppleIOSurfaceOutputNode` copies the final image into the output surface on the GPU. The
+window is a layer-backed `NSView`: its `CALayer.contents` is the surface, so presenting a frame costs
+one property assignment and no pixel copy.
 
 `--cpu` selects the fallback instead: `CpuVideoFrameSink` converts the decoder's NV12 planes to
 `VideoFrameDesc`, and `VideoFrameInputNode` queues and uploads them on the effect render thread. It

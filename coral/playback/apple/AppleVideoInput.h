@@ -70,10 +70,10 @@ public:
    * Creates the zero-copy aggregate: an `AppleIOSurfaceInputNode`, the hardware decoder surface and
    * the Apple `VideoFrameSink`.
    *
-   * <p>VideoToolbox produces a bi-planar NV12 `CVPixelBuffer` today; the sink converts it to one
-   * BGRA IOSurface on the GPU (VideoToolbox's pixel transfer session) and submits that surface. The
-   * decoder surface and the pixels never visit the CPU. When the input node grows a bi-planar path,
-   * the conversion ring can be removed without changing this entry point.
+   * <p>The sink asks the decoder for BGRA through the `MediaFormat` process format. The Darwin
+   * decoder honors it with VideoToolbox's 32BGRA output, so its IOSurface is submitted directly and
+   * the frame is zero-copy. A decoder that keeps NV12 falls back to a GPU NV12-to-BGRA conversion
+   * ring inside the sink; the pixels never visit the CPU either way.
    *
    * @param width      frame width in pixels.
    * @param height     frame height in pixels.

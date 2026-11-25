@@ -181,6 +181,8 @@ struct AppleVideoFrameSink::State {
   std::vector<Slot> slots;
   mutable std::mutex mutex;
   std::atomic<uint64_t> submitted { 0 };
+  std::atomic<uint64_t> direct { 0 };
+  std::atomic<uint64_t> converted { 0 };
   std::atomic<uint64_t> dropped { 0 };
   std::atomic_bool warnedRingFailure { false };
 };
@@ -274,6 +276,10 @@ std::shared_ptr<AppleVideoFrameSink> AppleVideoFrameSink::create(
 
 AppleVideoFrameSink::~AppleVideoFrameSink() = default;
 
+PixelFormat AppleVideoFrameSink::processFormat() const {
+  return PixelFormat::kFormatBGRA;
+}
+
 void AppleVideoFrameSink::setInputFormat(const std::shared_ptr<MediaFormat>& format) {
   // The conversion slots are sized from the aggregate's width/height, which the application takes
   // from the track. A mid-stream size change is rare and currently drops frames with one warning.
@@ -321,6 +327,9 @@ bool AppleVideoFrameSink::submit(std::shared_ptr<AVPixelBuffer> frame, const int
       return false;
     }
     mState->submitted.fetch_add(1, std::memory_order_relaxed);
+    if (mState->direct.fetch_add(1, std::memory_order_relaxed) == 0) {
+      MINILOG_INFO("the Apple sink samples the decoder's BGRA IOSurface directly");
+    }
     return true;
   }
 
@@ -383,6 +392,9 @@ bool AppleVideoFrameSink::submit(std::shared_ptr<AVPixelBuffer> frame, const int
     return false;
   }
   mState->submitted.fetch_add(1, std::memory_order_relaxed);
+  if (mState->converted.fetch_add(1, std::memory_order_relaxed) == 0) {
+    MINILOG_INFO("the Apple sink converts NV12 to BGRA; the decoder did not honor the process format");
+  }
   return true;
 }
 
@@ -403,6 +415,14 @@ bool AppleVideoFrameSink::isZeroCopy() const {
 
 uint64_t AppleVideoFrameSink::submittedFrameCount() const noexcept {
   return mState != nullptr ? mState->submitted.load(std::memory_order_relaxed) : 0;
+}
+
+uint64_t AppleVideoFrameSink::directFrameCount() const noexcept {
+  return mState != nullptr ? mState->direct.load(std::memory_order_relaxed) : 0;
+}
+
+uint64_t AppleVideoFrameSink::convertedFrameCount() const noexcept {
+  return mState != nullptr ? mState->converted.load(std::memory_order_relaxed) : 0;
 }
 
 uint64_t AppleVideoFrameSink::droppedFrameCount() const noexcept {

@@ -29,6 +29,8 @@
 #include <coral/playback/apple/AppleVideoInput.h>
 #include <coral/playback/apple/AppleVideoOutputNodeFactory.h>
 
+#include "platform/apple/AppleVideoFrameSink.h"
+
 #include <effect/EffectEngine.h>
 #include <effect/EffectPassNode.h>
 #include <effect/VideoFrameInputNode.h>
@@ -442,6 +444,8 @@ TEST(AppleLivePlayerEffectTest, SamplesTheDecodersSurfaceThroughTheAppleSink) {
   ASSERT_NE(effectInput.inputNode, nullptr);
   ASSERT_NE(effectInput.decoderSurface, nullptr);
   ASSERT_NE(effectInput.frameSink, nullptr);
+  const auto appleSink = std::dynamic_pointer_cast<AppleVideoFrameSink>(effectInput.frameSink);
+  ASSERT_NE(appleSink, nullptr);
 
   player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
   ASSERT_TRUE(player->isVideoEffectPipelineEnabled());
@@ -469,11 +473,16 @@ TEST(AppleLivePlayerEffectTest, SamplesTheDecodersSurfaceThroughTheAppleSink) {
   EXPECT_TRUE(waitFor([&] { return engine->stats().frameCount > 0; }, 15s))
       << "the player never presented an effect frame: " << engine->diagnostics();
 
-  // The Apple sink converts the decoder's NV12 surface to BGRA on the GPU and the input node imports
-  // that surface; on Metal the import is in place.
+  // The sink asks the decoder for BGRA through MediaFormat::processFormat. When the decoder honors
+  // it, the sink submits the decoder's own IOSurface and never runs the NV12 conversion fallback.
+  EXPECT_TRUE(waitFor([&] { return appleSink->directFrameCount() > 0; }, 10s))
+      << "the decoder did not honor the BGRA process format; converted="
+      << appleSink->convertedFrameCount();
+  EXPECT_EQ(appleSink->convertedFrameCount(), 0u)
+      << "the conversion ring is a fallback and should not run for a BGRA decoder";
   if (engine->backend() == EffectBackend::Metal) {
     EXPECT_TRUE(waitFor([&] { return effectInput.frameSink->isZeroCopy(); }, 10s))
-        << "the Apple input should sample the converted IOSurface in place: "
+        << "the Apple input should sample the decoder's IOSurface in place: "
         << engine->diagnostics();
   }
 

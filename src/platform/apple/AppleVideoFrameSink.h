@@ -29,15 +29,15 @@ class AppleIOSurfaceInputNode;
 /**
  * The Apple sink: a decoded `CVPixelBuffer` becomes an `AppleIOSurfaceInputNode` frame.
  *
- * <p>VideoToolbox currently hands the Darwin decoder a bi-planar NV12 `CVPixelBuffer`, while
- * `AppleIOSurfaceInputNode` imports one BGRA texture. Until the input node grows a bi-planar path,
- * the sink performs one GPU conversion (VideoToolbox's pixel transfer session) into a small ring of
- * IOSurface-backed BGRA buffers and submits those surfaces; the decoder surface and the pixels
- * never visit the CPU.
+ * <p>The sink asks the decoder for BGRA through `VideoFrameSink::processFormat` (which the renderer
+ * writes into `MediaFormat::processFormat`). The Darwin decoder honors it with VideoToolbox's
+ * `kCVPixelFormatType_32BGRA`, so the decoder's own IOSurface is submitted directly and the frame
+ * stays zero-copy. The player core does not know the layout was requested.
  *
- * <p>When VideoToolbox already produced BGRA (or the input node learns NV12), the conversion ring
- * is bypassed and the decoder's own IOSurface is submitted directly. The player core does not know
- * which of the two happened.
+ * <p>A decoder that keeps the platform default NV12 falls back to one GPU conversion per frame:
+ * `VTPixelTransferSession` writes into a small ring of IOSurface-backed BGRA buffers that the sink
+ * submits instead. That path is only for decoders that cannot honor the process format; the pixels
+ * never visit the CPU either way.
  */
 class AppleVideoFrameSink final : public VideoFrameSink {
 public:
@@ -50,6 +50,9 @@ public:
   AppleVideoFrameSink& operator=(const AppleVideoFrameSink&) = delete;
 
   void setInputFormat(const std::shared_ptr<MediaFormat>& format) override;
+
+  /** Asks the decoder for BGRA; an NV12 decoder falls back to the conversion ring. */
+  [[nodiscard]] PixelFormat processFormat() const override;
 
   bool submit(std::shared_ptr<AVPixelBuffer> frame, int64_t positionUs) override;
 
@@ -65,8 +68,14 @@ public:
    */
   [[nodiscard]] bool isZeroCopy() const override;
 
-  /** The number of frames the sink has converted or submitted; used by diagnostics and tests. */
+  /** The number of frames the sink has accepted; used by diagnostics and tests. */
   [[nodiscard]] uint64_t submittedFrameCount() const noexcept;
+
+  /** Frames submitted straight from the decoder's own BGRA IOSurface. */
+  [[nodiscard]] uint64_t directFrameCount() const noexcept;
+
+  /** Frames that needed the NV12-to-BGRA conversion fallback. */
+  [[nodiscard]] uint64_t convertedFrameCount() const noexcept;
 
   /** Whether the sink has had to drop frames because all conversion slots were busy. */
   [[nodiscard]] uint64_t droppedFrameCount() const noexcept;

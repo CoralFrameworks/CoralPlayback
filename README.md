@@ -187,10 +187,10 @@ decoder, each supplied by the framework below CoralPlayback:
   Android adds a pull-model SurfaceTexture sink that only releases the codec buffer while
   `AndroidSurfaceTextureInputNode` samples the texture on the render thread. Apple's
   `AppleVideoInput::createZeroCopyInput` aggregates `AppleHardwareVideoSurface`,
-  `AppleVideoFrameSink` and `AppleIOSurfaceInputNode`: VideoToolbox decodes into an IOSurface, the
-  sink converts the current NV12 surface to one BGRA IOSurface on the GPU (a small ring), and the
-  input node imports it in place. A bi-planar `AppleIOSurfaceInputNode` can later remove that
-  conversion without changing the player core.
+  `AppleVideoFrameSink` and `AppleIOSurfaceInputNode`. The sink asks the decoder for BGRA through
+  `MediaFormat::processFormat`; the Darwin decoder honors it with VideoToolbox's 32BGRA output, so
+  the decoder's own IOSurface is submitted and the frame is zero-copy. A decoder that keeps NV12
+  falls back to a GPU NV12-to-BGRA conversion ring inside the sink, again without a CPU copy.
 
 The standalone configure enables Objective-C++ before the dependencies are added, which is what the
 Darwin sources of CoralCore, CoralMedia and CoralSubtitle need. CoralGraphics' Metal frame clock uses

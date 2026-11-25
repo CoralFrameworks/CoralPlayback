@@ -28,12 +28,14 @@
  * ```
  *
  * Zero-copy is the default. `AppleHardwareVideoSurface` asks VideoToolbox for IOSurface-backed
- * frames; `AppleVideoFrameSink` converts the decoder's NV12 surface to one BGRA IOSurface on the GPU
- * and publishes it to `AppleIOSurfaceInputNode`, so the pixels never visit the CPU. `--cpu` selects
- * the fallback instead: `DecodeVideoRenderer` hands the frame to the player's CPU sink, which
- * converts the planes and uploads them through `VideoFrameInputNode`. In both cases the graph
- * composes the frame and `AppleVideoOutputNodeFactory` turns the application's `AppleIOSurface` into
- * an `AppleIOSurfaceOutputNode`, which copies the final image into that surface on the GPU.
+ * frames; `AppleVideoFrameSink` asks the decoder for BGRA through the `MediaFormat` process format,
+ * so the decoder's own IOSurface is published straight to `AppleIOSurfaceInputNode` and the pixels
+ * never visit the CPU. A decoder that keeps NV12 falls back to a GPU NV12-to-BGRA conversion ring
+ * inside the sink. `--cpu` selects the CPU sink instead: `DecodeVideoRenderer` hands the frame to
+ * the player's CPU sink, which converts the planes and uploads them through `VideoFrameInputNode`.
+ * In every case the graph composes the frame and `AppleVideoOutputNodeFactory` turns the
+ * application's `AppleIOSurface` into an `AppleIOSurfaceOutputNode`, which copies the final image
+ * into that surface on the GPU.
  *
  * The window is a layer-backed `NSView` whose `CALayer.contents` is the surface. Re-assigning the
  * surface on every new effect frame is what makes Core Animation re-composite it; the pixels never

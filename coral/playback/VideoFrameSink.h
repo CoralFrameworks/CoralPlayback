@@ -17,6 +17,8 @@
 #ifndef CORAL_PLAYBACK_VIDEO_FRAME_SINK_H
 #define CORAL_PLAYBACK_VIDEO_FRAME_SINK_H
 
+#include <media/Types.h>
+
 #include <cstdint>
 #include <memory>
 
@@ -86,6 +88,19 @@ public:
 
   /** Drops queued platform frames and handles, for example after a seek. */
   virtual void flush() = 0;
+
+  /**
+   * The decoder output layout this sink wants, or `PixelFormat::kFormatInvalid` for the decoder's
+   * default.
+   *
+   * <p>The renderer applies it to the `MediaFormat` it hands the decoder, so no player or media-item
+   * API has to carry a platform preference. A sink that samples one RGBA texture returns
+   * `kFormatBGRA`; a decoder that cannot produce it keeps its default and the sink handles the
+   * conversion itself.
+   */
+  [[nodiscard]] virtual PixelFormat processFormat() const {
+    return PixelFormat::kFormatInvalid;
+  }
 
   /** Whether the last submitted frame used the platform's zero-copy path. */
   [[nodiscard]] virtual bool isZeroCopy() const {

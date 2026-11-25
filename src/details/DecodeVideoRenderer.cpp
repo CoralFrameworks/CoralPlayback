@@ -571,11 +571,22 @@ DecodeVideoRenderer::createDecoder(const std::shared_ptr<MediaFormat>& inputForm
     return nullptr;
   }
 
+  // The sink may ask for a decoder output layout (Apple's IOSurface input wants one BGRA texture).
+  // The preference travels in the format, so the decoder API and the player API stay unchanged.
+  std::shared_ptr<MediaFormat> decoderFormat = inputFormat;
+  if (mFrameSink != nullptr) {
+    const auto requested = mFrameSink->processFormat();
+    if (requested != PixelFormat::kFormatInvalid) {
+      decoderFormat = inputFormat->buildUpon();
+      decoderFormat->setProcessFormat(requested);
+    }
+  }
+
   auto videoCodecType = inputFormat->getVideoCodecType();
   auto manufacturer = CodecUtils::getVideoCodecManufacturer(inputFormat->getMimeType(), false);
   auto decoder = CreateBuiltinVideoCodecFactory()->createVideoDecoder(videoCodecType, manufacturer);
   if (decoder != nullptr) {
-    decoder->configure(inputFormat, decoderSurface);
+    decoder->configure(decoderFormat, decoderSurface);
     decoder->start();
   }
 
