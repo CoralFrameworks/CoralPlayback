@@ -121,6 +121,7 @@ struct Options {
   bool mute = false;
   bool showWindow = true;
   bool zeroCopy = true;
+  float speed = 1.0f;
 };
 
 void printUsage(const char* program) {
@@ -136,6 +137,7 @@ void printUsage(const char* program) {
       "  --mute                set the audio volume to zero\n"
       "  --cpu                 decode through CPU planes and upload them (default: zero-copy)\n"
       "  --zero-copy           sample the decoder's IOSurface (the default)\n"
+      "  --speed N             playback speed, e.g. 2.0 (default: 1.0)\n"
       "  --help                this text\n",
       program);
 }
@@ -171,6 +173,20 @@ std::optional<Options> parseOptions(const int argc, char** argv) {
     }
     if (argument == "--zero-copy") {
       options.zeroCopy = true;
+      continue;
+    }
+    if (argument == "--speed") {
+      if (++index >= argc) {
+        std::fprintf(stderr, "error: --speed needs a factor\n");
+        return std::nullopt;
+      }
+      char* end = nullptr;
+      const float speed = std::strtof(argv[index], &end);
+      if (end == argv[index] || *end != '\0' || speed <= 0.0f) {
+        std::fprintf(stderr, "error: invalid --speed '%s'\n", argv[index]);
+        return std::nullopt;
+      }
+      options.speed = speed;
       continue;
     }
     if (argument == "--size") {
@@ -449,6 +465,9 @@ public:
     player->setOutputSurface(surface);
 
     session->mPlayer = std::move(player);
+    if (options.speed != 1.0f) {
+      session->mPlayer->setPlaybackParameters(coral::Parameters(options.speed));
+    }
     session->mPlayer->prepare();
 
     // Wait for the source to be ready before starting: a player that is told to play while the first
@@ -767,6 +786,7 @@ int main(int argc, char** argv) {
 
   std::printf("media: %s\n", options->mediaPath.c_str());
   std::printf("audio: %s\n", options->audio ? "on" : "off");
+  std::printf("speed: %.2fx\n", options->speed);
 
   if (!options->showWindow) {
     return runHeadless(*options);

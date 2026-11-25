@@ -2013,6 +2013,12 @@ void AvLivePlayer::handlePlaybackParameters(const Parameters& parameters, bool a
   for (auto const& renderer: renderers) {
     if (renderer != nullptr) {
       renderer->setOperatingRate(parameters.speed);
+      // An audio renderer is also the media clock. It may not have been enabled when the player
+      // applied the parameters to the clock, so apply them to the renderer itself as well; when it
+      // becomes the clock source it otherwise keeps its default 1x rate.
+      if (auto* clock = dynamic_cast<MediaClock*>(renderer.get()); clock != nullptr) {
+        clock->setPlaybackParameters(parameters);
+      }
     }
   }
   dispatchPlayerEvent([parameters](EventListener& listener) {
