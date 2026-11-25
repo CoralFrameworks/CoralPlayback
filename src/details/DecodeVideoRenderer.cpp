@@ -22,6 +22,8 @@
 
 #include <core/time/SystemClock.h>
 
+#include <effect/EffectEngine.h>
+
 #include <codec/MediaCodecFactory.h>
 #include <codec/Utilities.h>
 #include <media/Utilities.h>
@@ -571,10 +573,17 @@ DecodeVideoRenderer::createDecoder(const std::shared_ptr<MediaFormat>& inputForm
     return nullptr;
   }
 
-  // The sink may ask for a decoder output layout (Apple's IOSurface input wants one BGRA texture).
-  // The preference travels in the format, so the decoder API and the player API stay unchanged.
+  // The sink may ask for a decoder output layout (Apple's IOSurface input wants NV12 on Metal or one
+  // BGRA texture on OpenGL). The preference travels in the format, so the decoder API and the player
+  // API stay unchanged.
   std::shared_ptr<MediaFormat> decoderFormat = inputFormat;
   if (mFrameSink != nullptr) {
+    if (mVideoEffectGraph != nullptr) {
+      const auto engine = mVideoEffectGraph->engine();
+      if (engine != nullptr) {
+        mFrameSink->setEngineBackend(engine->backend());
+      }
+    }
     const auto requested = mFrameSink->processFormat();
     if (requested != PixelFormat::kFormatInvalid) {
       decoderFormat = inputFormat->buildUpon();

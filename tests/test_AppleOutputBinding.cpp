@@ -33,10 +33,12 @@
 
 #include <effect/EffectEngine.h>
 #include <effect/EffectPassNode.h>
+#include <effect/ReadbackOutputNode.h>
 #include <effect/VideoFrameInputNode.h>
 #include <effect/platform/apple/AppleIOSurfaceInputNode.h>
 #include <effect/platform/apple/AppleIOSurfaceOutputNode.h>
 
+#include <CoreVideo/CoreVideo.h>
 #include <IOSurface/IOSurface.h>
 
 #include <gtest/gtest.h>
@@ -376,6 +378,124 @@ TEST(AppleIOSurfaceOutputTest, RendersAGraphFrameIntoTheSurface) {
   EXPECT_EQ(pixel[3], 255u) << "alpha";
 
   engine->stop();
+}
+
+// ==================================================================================================
+// NV12 input
+// ==================================================================================================
+
+/** Creates an IOSurface-backed NV12 pixel buffer filled with BT.709 limited-range red. */
+CVPixelBufferRef createRedNv12Buffer(const uint32_t width, const uint32_t height) {
+  CFMutableDictionaryRef attributes = CFDictionaryCreateMutable(
+      kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+  if (attributes == nullptr) {
+    return nullptr;
+  }
+  int value = static_cast<int>(width);
+  CFNumberRef number = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &value);
+  CFDictionarySetValue(attributes, kCVPixelBufferWidthKey, number);
+  CFRelease(number);
+  value = static_cast<int>(height);
+  number = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &value);
+  CFDictionarySetValue(attributes, kCVPixelBufferHeightKey, number);
+  CFRelease(number);
+  value = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+  number = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &value);
+  CFDictionarySetValue(attributes, kCVPixelBufferPixelFormatTypeKey, number);
+  CFRelease(number);
+  CFMutableDictionaryRef surfaceProperties = CFDictionaryCreateMutable(
+      kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+  if (surfaceProperties != nullptr) {
+    CFDictionarySetValue(attributes, kCVPixelBufferIOSurfacePropertiesKey, surfaceProperties);
+    CFRelease(surfaceProperties);
+  }
+
+  CVPixelBufferRef buffer = nullptr;
+  if (CVPixelBufferCreate(kCFAllocatorDefault, width, height,
+                          kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, attributes,
+                          &buffer) != kCVReturnSuccess) {
+    CFRelease(attributes);
+    return nullptr;
+  }
+  CFRelease(attributes);
+  if (CVPixelBufferLockBaseAddress(buffer, 0) != kCVReturnSuccess) {
+    CVPixelBufferRelease(buffer);
+    return nullptr;
+  }
+  auto* luma = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(buffer, 0));
+  auto* chroma = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(buffer, 1));
+  const size_t lumaStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0);
+  const size_t chromaStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 1);
+  for (uint32_t row = 0; row < height; ++row) {
+    std::memset(luma + row * lumaStride, 63, width); // BT.709 limited-range red luma
+  }
+  for (uint32_t row = 0; row < (height + 1) / 2; ++row) {
+    uint8_t* pixel = chroma + row * chromaStride;
+    for (uint32_t column = 0; column < (width + 1) / 2; ++column) {
+      pixel[column * 2 + 0] = 102; // Cb
+      pixel[column * 2 + 1] = 240; // Cr
+    }
+  }
+  CVPixelBufferUnlockBaseAddress(buffer, 0);
+  return buffer;
+}
+
+TEST(AppleIOSurfaceInputTest, ConvertsBiPlanarNv12ToRgba) {
+  constexpr uint32_t kSize = 64;
+  CVPixelBufferRef buffer = createRedNv12Buffer(kSize, kSize);
+  ASSERT_NE(buffer, nullptr);
+  IOSurfaceRef surface = CVPixelBufferGetIOSurface(buffer);
+  ASSERT_NE(surface, nullptr);
+  ASSERT_EQ(IOSurfaceGetPlaneCount(surface), 2u);
+
+  EffectEngineConfig config;
+  config.backend = EffectBackend::Metal;
+  config.renderMode = EffectRenderMode::Manual;
+  config.renderWidth = kSize;
+  config.renderHeight = kSize;
+  config.timeBase = 1'000'000;
+  const auto engine = EffectEngine::create(config);
+  ASSERT_NE(engine, nullptr);
+
+  const auto input = AppleIOSurfaceInputNode::create(kSize, kSize, EffectPixelFormat::YUV420);
+  ASSERT_NE(input, nullptr);
+  const auto pass = engine->createEffectNode("pass");
+  ASSERT_NE(pass, nullptr);
+  EffectShaderDesc shader;
+  shader.name = "apple-nv12-passthrough";
+  shader.fragmentSource = "  return texture(uInput0, uv);";
+  shader.inputCount = 1;
+  ASSERT_EQ(pass->setShader(shader), EffectResult::Success);
+  const auto output = ReadbackOutputNode::create();
+  ASSERT_NE(output, nullptr);
+
+  ASSERT_EQ(engine->attach(input), EffectResult::Success);
+  ASSERT_EQ(engine->attach(output), EffectResult::Success);
+  ASSERT_EQ(engine->connect(input, pass), EffectResult::Success);
+  ASSERT_EQ(engine->connect(pass, output), EffectResult::Success);
+  ASSERT_EQ(engine->setOutput(output), EffectResult::Success);
+
+  if (engine->start() != EffectResult::Success) {
+    CVPixelBufferRelease(buffer);
+    GTEST_SKIP() << "the effect engine could not start on this host: " << engine->diagnostics();
+  }
+  ASSERT_EQ(input->submit(surface, kSize, kSize, EffectPixelFormat::YUV420,
+                          RenderTime::fromTicks(0, 1'000'000)),
+            EffectResult::Success);
+  ASSERT_EQ(engine->execute(), EffectResult::Success) << engine->diagnostics();
+  ASSERT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+
+  EffectFrame metadata;
+  std::vector<uint8_t> pixels;
+  ASSERT_TRUE(output->waitForFrame(&metadata, &pixels)) << engine->diagnostics();
+  const size_t centre = (static_cast<size_t>(kSize / 2) * kSize + kSize / 2) * 4;
+  EXPECT_GE(pixels[centre + 0], 245u) << "red";
+  EXPECT_LE(pixels[centre + 1], 8u) << "green";
+  EXPECT_LE(pixels[centre + 2], 8u) << "blue";
+  EXPECT_GE(pixels[centre + 3], 250u) << "alpha";
+
+  engine->stop();
+  CVPixelBufferRelease(buffer);
 }
 
 // ==================================================================================================

@@ -85,7 +85,7 @@ if (APPLE)
   # The Apple bridge: the IOSurface wrapper, the output factory and the IOSurface output node. The
   # platform headers come from `effect_apple`, which `playback` links publicly.
   target_sources(${TARGET} PRIVATE test_AppleOutputBinding.cpp)
-  target_link_libraries(${TARGET} PRIVATE effect_apple)
+  target_link_libraries(${TARGET} PRIVATE effect_apple "-framework CoreVideo")
 endif ()
 
 set_target_properties(${TARGET} PROPERTIES FOLDER Tests)

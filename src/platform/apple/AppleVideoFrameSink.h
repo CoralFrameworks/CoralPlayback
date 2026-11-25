@@ -29,15 +29,17 @@ class AppleIOSurfaceInputNode;
 /**
  * The Apple sink: a decoded `CVPixelBuffer` becomes an `AppleIOSurfaceInputNode` frame.
  *
- * <p>The sink asks the decoder for BGRA through `VideoFrameSink::processFormat` (which the renderer
- * writes into `MediaFormat::processFormat`). The Darwin decoder honors it with VideoToolbox's
- * `kCVPixelFormatType_32BGRA`, so the decoder's own IOSurface is submitted directly and the frame
- * stays zero-copy. The player core does not know the layout was requested.
+ * <p>The sink asks the decoder for the layout its input node can import, through
+ * `VideoFrameSink::processFormat` (which the renderer writes into `MediaFormat::processFormat`). On
+ * Metal it requests the decoder's native NV12: the apple input imports both planes and converts them
+ * in one GPU pass, so the decoder's own IOSurface is submitted directly. On OpenGL/ES it requests
+ * BGRA and the decoder performs the YUV-to-RGB conversion, which is the layout the OpenGL bridge can
+ * sample. The player core does not know the layout was requested.
  *
- * <p>A decoder that keeps the platform default NV12 falls back to one GPU conversion per frame:
- * `VTPixelTransferSession` writes into a small ring of IOSurface-backed BGRA buffers that the sink
- * submits instead. That path is only for decoders that cannot honor the process format; the pixels
- * never visit the CPU either way.
+ * <p>A decoder that ignores the request and keeps NV12 on OpenGL falls back to one GPU conversion per
+ * frame: `VTPixelTransferSession` writes into a small ring of IOSurface-backed BGRA buffers that the
+ * sink submits instead. HDR NV12 also takes that ring until the input node's conversion handles HDR.
+ * The pixels never visit the CPU either way.
  */
 class AppleVideoFrameSink final : public VideoFrameSink {
 public:
@@ -51,7 +53,12 @@ public:
 
   void setInputFormat(const std::shared_ptr<MediaFormat>& format) override;
 
-  /** Asks the decoder for BGRA; an NV12 decoder falls back to the conversion ring. */
+  void setEngineBackend(EffectBackend backend) override;
+
+  /**
+   * NV12 on Metal, where the input node imports the two planes; BGRA on OpenGL/ES, where the
+   * decoder performs the YUV-to-RGB conversion and the input node samples one texture.
+   */
   [[nodiscard]] PixelFormat processFormat() const override;
 
   bool submit(std::shared_ptr<AVPixelBuffer> frame, int64_t positionUs) override;

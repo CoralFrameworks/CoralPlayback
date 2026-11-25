@@ -28,11 +28,12 @@
  * ```
  *
  * Zero-copy is the default. `AppleHardwareVideoSurface` asks VideoToolbox for IOSurface-backed
- * frames; `AppleVideoFrameSink` asks the decoder for BGRA through the `MediaFormat` process format,
- * so the decoder's own IOSurface is published straight to `AppleIOSurfaceInputNode` and the pixels
- * never visit the CPU. A decoder that keeps NV12 falls back to a GPU NV12-to-BGRA conversion ring
- * inside the sink. `--cpu` selects the CPU sink instead: `DecodeVideoRenderer` hands the frame to
- * the player's CPU sink, which converts the planes and uploads them through `VideoFrameInputNode`.
+ * frames; on Metal `AppleVideoFrameSink` asks the decoder for NV12 through the `MediaFormat` process
+ * format, and `AppleIOSurfaceInputNode` imports both planes and converts them in one GPU pass. On
+ * OpenGL/ES the sink asks for BGRA and the decoder performs the conversion. A decoder that ignores
+ * the request falls back to a GPU NV12-to-BGRA conversion ring inside the sink. `--cpu` selects the
+ * CPU sink instead: `DecodeVideoRenderer` hands the frame to the player's CPU sink, which converts
+ * the planes and uploads them through `VideoFrameInputNode`.
  * In every case the graph composes the frame and `AppleVideoOutputNodeFactory` turns the
  * application's `AppleIOSurface` into an `AppleIOSurfaceOutputNode`, which copies the final image
  * into that surface on the GPU.

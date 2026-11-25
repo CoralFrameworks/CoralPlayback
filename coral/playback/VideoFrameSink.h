@@ -17,6 +17,8 @@
 #ifndef CORAL_PLAYBACK_VIDEO_FRAME_SINK_H
 #define CORAL_PLAYBACK_VIDEO_FRAME_SINK_H
 
+#include <effect/EffectTypes.h>
+
 #include <media/Types.h>
 
 #include <cstdint>
@@ -76,6 +78,17 @@ public:
   }
 
   /**
+   * Tells the sink which effect backend will consume its frames.
+   *
+   * <p>A platform sink can use this to choose a layout the input node can import without a conversion
+   * (Apple's NV12 plane import needs Metal) and fall back to a decoder-side layout on a backend that
+   * cannot. The renderer calls it before the decoder is configured.
+   */
+  virtual void setEngineBackend(EffectBackend backend) {
+    static_cast<void>(backend);
+  }
+
+  /**
    * Publishes one decoded frame at @p positionUs (media time, microseconds).
    *
    * @return true when the frame was accepted; false when it was dropped. The sink owns the frame in
@@ -94,9 +107,9 @@ public:
    * default.
    *
    * <p>The renderer applies it to the `MediaFormat` it hands the decoder, so no player or media-item
-   * API has to carry a platform preference. A sink that samples one RGBA texture returns
-   * `kFormatBGRA`; a decoder that cannot produce it keeps its default and the sink handles the
-   * conversion itself.
+   * API has to carry a platform preference. Apple's sink returns `kFormatNV12` on Metal (the input
+   * imports both planes) and `kFormatBGRA` on OpenGL/ES (the decoder converts); a decoder that cannot
+   * produce the requested layout keeps its default and the sink handles the conversion itself.
    */
   [[nodiscard]] virtual PixelFormat processFormat() const {
     return PixelFormat::kFormatInvalid;

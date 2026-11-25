@@ -173,6 +173,7 @@ struct AppleVideoFrameSink::State {
   }
 
   std::shared_ptr<AppleIOSurfaceInputNode> input;
+  EffectBackend backend = EffectBackend::Default;
   uint32_t width = 0;
   uint32_t height = 0;
   uint32_t ringWidth = 0;
@@ -231,11 +232,12 @@ private:
 
 PixelBufferView makeView(const IOSurfaceRef surface, const uint32_t width, const uint32_t height,
                          const int64_t positionUs, const ColorInfo& color,
-                         std::shared_ptr<void> lifetime) {
+                         std::shared_ptr<void> lifetime,
+                         const EffectPixelFormat format = EffectPixelFormat::BGRA8) {
   PixelBufferView view;
   view.width = width;
   view.height = height;
-  view.format = EffectPixelFormat::BGRA8;
+  view.format = format;
   view.colorSpace = EffectColorSpace::SRGB;
   view.storage = PixelBufferStorageKind::IOSurface;
   view.capabilities = PixelBufferCapability::TextureSample;
@@ -276,8 +278,15 @@ std::shared_ptr<AppleVideoFrameSink> AppleVideoFrameSink::create(
 
 AppleVideoFrameSink::~AppleVideoFrameSink() = default;
 
+void AppleVideoFrameSink::setEngineBackend(const EffectBackend backend) {
+  mState->backend = backend;
+}
+
 PixelFormat AppleVideoFrameSink::processFormat() const {
-  return PixelFormat::kFormatBGRA;
+  // The input node imports NV12 as two planes on Metal. On the OpenGL/ES compatibility backend the
+  // decoder converts to BGRA and the node samples one texture, so no conversion ring is needed.
+  return mState->backend == EffectBackend::Metal ? PixelFormat::kFormatNV12
+                                                 : PixelFormat::kFormatBGRA;
 }
 
 void AppleVideoFrameSink::setInputFormat(const std::shared_ptr<MediaFormat>& format) {
@@ -341,6 +350,35 @@ bool AppleVideoFrameSink::submit(std::shared_ptr<AVPixelBuffer> frame, const int
 
   const auto width = static_cast<uint32_t>(CVPixelBufferGetWidth(source));
   const auto height = static_cast<uint32_t>(CVPixelBufferGetHeight(source));
+
+  // Metal can import the two NV12 planes directly. The input node converts them in one GPU pass, and
+  // the decoder's own surface is what is sampled, so no conversion ring is involved.
+  const bool hdr = color.colorSpace == ColorInfo::SpaceType::kSpaceBT2020 &&
+                   (color.colorTransfer == ColorInfo::TransferType::kTransferST2084 ||
+                    color.colorTransfer == ColorInfo::TransferType::kTransferHLG);
+  if (mState->backend == EffectBackend::Metal && !hdr) {
+    IOSurfaceRef surface = CVPixelBufferGetIOSurface(source);
+    if (surface == nullptr) {
+      mState->dropped.fetch_add(1, std::memory_order_relaxed);
+      frame->release();
+      return false;
+    }
+    auto lease = std::make_shared<SourceLease>(std::move(frame));
+    const PixelBufferView view = makeView(surface, width, height, positionUs, color,
+                                          std::move(lease), EffectPixelFormat::YUV420);
+    if (mState->input->submit(view) != EffectResult::Success) {
+      // The source lease releases the frame when the view goes out of scope; the conversion ring has
+      // no frame left to fall back on, so this failure is reported as a drop.
+      mState->dropped.fetch_add(1, std::memory_order_relaxed);
+      return false;
+    }
+    mState->submitted.fetch_add(1, std::memory_order_relaxed);
+    if (mState->direct.fetch_add(1, std::memory_order_relaxed) == 0) {
+      MINILOG_INFO("the Apple sink samples the decoder's NV12 IOSurface directly");
+    }
+    return true;
+  }
+
   if (!mState->ensureSlots(width, height)) {
     if (!mState->warnedRingFailure.exchange(true)) {
       MINILOG_WARN("the Apple frame sink could not resize its conversion ring for {}x{}",
