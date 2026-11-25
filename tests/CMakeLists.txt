@@ -57,6 +57,7 @@ add_executable(${TARGET}
     test_TextRenderer.cpp
     test_ProgressiveMediaSource.cpp
     test_SilenceMediaSource.cpp
+    test_SubtitleTracks.cpp
     test_SubtitleOverlayNode.cpp
     test_UpstreamAndSelection.cpp
     test_VideoEffectGraph.cpp
@@ -73,7 +74,7 @@ target_include_directories(${TARGET} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${CORAL_SUBTITLE_SRC_DIR}
 )
-target_link_libraries(${TARGET} PRIVATE playback extractor gtest)
+target_link_libraries(${TARGET} PRIVATE playback extractor muxer gtest)
 target_compile_definitions(${TARGET} PRIVATE CORAL_ASSETS_DIR="${CORAL_TEST_DATA_DIR}")
 target_compile_definitions(${TARGET} PRIVATE CORAL_GRAPHICS_RESOURCE_DIR="${CORAL_GRAPHICS_RESOURCE_DIR}")
 
