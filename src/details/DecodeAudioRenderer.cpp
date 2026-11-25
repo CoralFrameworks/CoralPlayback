@@ -191,6 +191,12 @@ AudioRendererStats DecodeAudioRenderer::getRenderStats() const {
   stats.skippedOutputBufferCount = decoderCounters.skippedOutputBufferCount;
   stats.droppedBufferCount = decoderCounters.droppedBufferCount;
   stats.sinkBackpressureCount = sinkBackpressureCount;
+  if (audioSink != nullptr) {
+    stats.xRunCountSupported = audioSink->isXRunCountSupported();
+    if (stats.xRunCountSupported) {
+      stats.xRunCount = audioSink->getXRunCount();
+    }
+  }
   return stats;
 }
 

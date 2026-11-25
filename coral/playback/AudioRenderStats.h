@@ -42,6 +42,12 @@ struct AudioRendererStats {
    * not a platform XRun count.
    */
   uint64_t sinkBackpressureCount = 0;
+
+  /** Whether the platform sink exposes an XRun (underrun/overrun) counter. */
+  bool xRunCountSupported = false;
+
+  /** The platform XRun count, valid when {@link xRunCountSupported} is true. */
+  uint32_t xRunCount = 0;
 };
 
 } // namespace coral

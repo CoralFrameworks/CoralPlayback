@@ -84,6 +84,19 @@ TEST(AudioPlaybackTest, PlaysTheAudioTrackOfAProgressiveMp4) {
       << " positionUs=" << player->getCurrentPositionUs()
       << " error='" << player->getPlaybackErrorMessage() << "'";
 
+  const auto stats = player->getAudioRendererStats();
+  ASSERT_EQ(stats.size(), 1u);
+  EXPECT_TRUE(stats[0].enabled);
+#if defined(__APPLE__)
+  EXPECT_TRUE(stats[0].xRunCountSupported)
+      << "the CoreAudio sink should expose its XRun counter";
+#endif
+  if (stats[0].xRunCountSupported) {
+    // A healthy five-second playback should not have starved the device; the exact count is
+    // platform-dependent, so only require that it is readable and that a supported sink reports it.
+    EXPECT_GE(stats[0].xRunCount, 0u);
+  }
+
   player->release();
 }
 
