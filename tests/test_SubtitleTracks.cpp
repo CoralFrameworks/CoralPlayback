@@ -19,6 +19,8 @@
 #include <coral/playback/Tracks.h>
 
 #include <media/Format.h>
+#include <media/Metadata.h>
+#include <media/MetadataEntries.h>
 #include <media/Types.h>
 #include <muxer/Muxer.h>
 #include <muxer/MuxerFactory.h>
@@ -47,6 +49,16 @@ bool waitFor(const std::function<bool()>& predicate, const std::chrono::millisec
     std::this_thread::sleep_for(5ms);
   }
   return predicate();
+}
+
+bool writeChapters(muxer::Muxer& muxer) {
+  std::vector<Mp4Chapter> chapterList;
+  chapterList.emplace_back(0, "Intro");
+  chapterList.emplace_back(2'000'000, "Main");
+  auto entry = std::make_shared<Mp4ChaptersData>(std::move(chapterList));
+  auto metadata = std::make_shared<Metadata>(
+      std::vector<std::shared_ptr<Metadata::Entry>>{ std::move(entry) });
+  return muxer.addMetadata(metadata);
 }
 
 bool writeTx3gTrack(muxer::Muxer& muxer, const std::string& language, const std::string& text) {
@@ -83,6 +95,7 @@ TEST(SubtitleTracksTest, ReportsAndSelectsInContainerTracks) {
   ASSERT_NE(file, nullptr) << error.message;
   ASSERT_TRUE(writeTx3gTrack(*file, "eng", "Hello")) << file->getError().message;
   ASSERT_TRUE(writeTx3gTrack(*file, "zho", "Ni hao")) << file->getError().message;
+  ASSERT_TRUE(writeChapters(*file)) << file->getError().message;
   ASSERT_TRUE(file->finish()) << file->getError().message;
   file.reset();
 
@@ -100,6 +113,14 @@ TEST(SubtitleTracksTest, ReportsAndSelectsInContainerTracks) {
     std::filesystem::remove(path);
     GTEST_SKIP() << player->getPlaybackErrorMessage();
   }
+
+  const auto chapters = player->getChapters();
+  ASSERT_GE(chapters.size(), 2u) << "the MP4 should expose its chpl chapters";
+  EXPECT_EQ(chapters[0].startUs, 0);
+  EXPECT_EQ(chapters[0].title, "Intro");
+  EXPECT_EQ(chapters[1].startUs, 2'000'000);
+  EXPECT_EQ(chapters[1].title, "Main");
+  EXPECT_GE(chapters[1].endUs, chapters[1].startUs);
 
   auto textTracks = [&]() {
     std::vector<Track> tracks;

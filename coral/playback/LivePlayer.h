@@ -153,6 +153,8 @@ public:
 
   [[nodiscard]] VideoColorInfo getVideoColorInfo() const override;
 
+  [[nodiscard]] std::vector<Chapter> getChapters() const override;
+
   void selectTrack(int rendererIndex, int groupIndex, int trackIndex) override;
 
   void clearTrackSelection(int rendererIndex) override;

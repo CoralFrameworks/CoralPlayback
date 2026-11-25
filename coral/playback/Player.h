@@ -16,6 +16,7 @@
 #ifndef CORAL_PLAYBACK_PLAYER_H
 #define CORAL_PLAYBACK_PLAYER_H
 
+#include <coral/playback/Chapters.h>
 #include <coral/playback/MetadataOutput.h>
 #include <coral/playback/Parameters.h>
 #include <coral/playback/TextOutput.h>
@@ -120,6 +121,9 @@ public:
 
     /** Called when the colour description of the video changed. */
     virtual void onVideoColorInfoChanged(const VideoColorInfo& colorInfo) {}
+
+    /** Called when the chapters of the current media item changed. */
+    virtual void onChaptersChanged(const std::vector<Chapter>& chapters) {}
 
     /**
      * Called when the available tracks or their selection changed.
@@ -248,6 +252,11 @@ public:
 
   /** Returns the colour description of the current video, or defaults when unknown. */
   [[nodiscard]] virtual VideoColorInfo getVideoColorInfo() const {
+    return {};
+  }
+
+  /** Returns the chapters of the current media item, or an empty list when it has none. */
+  [[nodiscard]] virtual std::vector<Chapter> getChapters() const {
     return {};
   }
 

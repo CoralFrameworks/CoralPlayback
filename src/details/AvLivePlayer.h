@@ -123,6 +123,8 @@ public:
 
   [[nodiscard]] VideoColorInfo getVideoColorInfo() const override;
 
+  [[nodiscard]] std::vector<Chapter> getChapters() const override;
+
   void selectTrack(int rendererIndex, int groupIndex, int trackIndex) override;
 
   void clearTrackSelection(int rendererIndex) override;
@@ -436,6 +438,10 @@ private:
   /** Delivers the current snapshot to the listeners. */
   void dispatchTracksChanged();
 
+  [[nodiscard]] std::vector<Chapter> buildChapters() const;
+
+  void dispatchChaptersChanged();
+
   void setMediaItemInternal(const std::shared_ptr<MediaSource>& mediaSource);
 
   int64_t seekToPeriodPosition(
@@ -687,6 +693,7 @@ private:
   AVCueGroup currentCueGroup;
   VideoFrameOutput videoFrameOutput;
   VideoColorInfo videoColorInfo;
+  std::vector<Chapter> chapters;
   std::shared_ptr<Renderer::VideoColorInfoListener> videoColorInfoListenerRef;
   std::atomic<int64_t> pendingVideoFramePositionUs { 0 };
   std::atomic<SubtitleRenderMode> subtitleRenderMode{ SubtitleRenderMode::kAuto };

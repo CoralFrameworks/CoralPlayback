@@ -180,6 +180,10 @@ VideoColorInfo LivePlayer::getVideoColorInfo() const {
   return mImpl->getVideoColorInfo();
 }
 
+std::vector<Chapter> LivePlayer::getChapters() const {
+  return mImpl->getChapters();
+}
+
 void LivePlayer::selectTrack(int rendererIndex, int groupIndex, int trackIndex) {
   mImpl->selectTrack(rendererIndex, groupIndex, trackIndex);
 }

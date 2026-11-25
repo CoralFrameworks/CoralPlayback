@@ -40,6 +40,8 @@
 #include "TraceUtil.h"
 
 #include <coral/selection/DefaultTrackSelector.h>
+
+#include <media/MetadataEntries.h>
 #include <coral/selection/MappingTrackSelector.h>
 #include <coral/selection/SelectionCapabilities.h>
 #include <coral/selection/SelectionOverride.h>
@@ -1601,6 +1603,11 @@ VideoColorInfo AvLivePlayer::getVideoColorInfo() const {
   return videoColorInfo;
 }
 
+std::vector<Chapter> AvLivePlayer::getChapters() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return chapters;
+}
+
 void AvLivePlayer::onVideoFrameRendered(std::shared_ptr<Fence> fence) {
   const auto positionUs = pendingVideoFramePositionUs.load(std::memory_order_relaxed);
   const std::lock_guard<Mutex> lock(outputLock);
@@ -1718,6 +1725,61 @@ Tracks AvLivePlayer::buildCurrentTracks() const {
 void AvLivePlayer::dispatchTracksChanged() {
   const Tracks tracks = buildCurrentTracks();
   dispatchPlayerEvent([tracks](EventListener& listener) { listener.onTracksChanged(tracks); });
+}
+
+std::vector<Chapter> AvLivePlayer::buildChapters() const {
+  std::vector<Chapter> result;
+  std::shared_ptr<Metadata> metadata;
+  for (const auto& group : buildCurrentTracks().groups) {
+    for (const auto& track : group.tracks) {
+      if (track.format != nullptr && track.format->getMetadata() != nullptr) {
+        metadata = track.format->getMetadata();
+        break;
+      }
+    }
+    if (metadata != nullptr) {
+      break;
+    }
+  }
+  if (metadata == nullptr) {
+    return result;
+  }
+  for (const auto& entry : metadata->getEntries()) {
+    if (entry == nullptr) {
+      continue;
+    }
+    if (const auto* quickTime = dynamic_cast<const Mp4ChaptersData*>(entry.get());
+        quickTime != nullptr) {
+      for (const auto& chapter : quickTime->getChapters()) {
+        result.push_back(Chapter{ chapter.getTimeUs(), chapter.getTimeUs(), chapter.getTitle() });
+      }
+    } else if (const auto* generic = dynamic_cast<const ChapterMetadataEntry*>(entry.get());
+               generic != nullptr) {
+      result.push_back(Chapter{ generic->getTimeUs(), generic->getTimeUs(), generic->getTitle() });
+    }
+  }
+  std::sort(result.begin(), result.end(),
+    [](const Chapter& lhs, const Chapter& rhs) { return lhs.startUs < rhs.startUs; });
+  result.erase(std::unique(result.begin(), result.end(),
+    [](const Chapter& lhs, const Chapter& rhs) {
+      return lhs.startUs == rhs.startUs && lhs.title == rhs.title;
+    }), result.end());
+  const auto durationUs = getDurationUs();
+  for (size_t index = 0; index < result.size(); ++index) {
+    result[index].endUs = index + 1 < result.size()
+      ? result[index + 1].startUs
+      : (durationUs > result[index].startUs ? durationUs : result[index].startUs);
+  }
+  return result;
+}
+
+void AvLivePlayer::dispatchChaptersChanged() {
+  const auto next = buildChapters();
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    chapters = next;
+  }
+  dispatchPlayerEvent([next](EventListener& listener) { listener.onChaptersChanged(next); });
 }
 
 void AvLivePlayer::setMediaItemInternal(const std::shared_ptr<MediaSource>& mediaSource) {
@@ -2213,6 +2275,7 @@ void AvLivePlayer::handlePeriodPrepared(const std::shared_ptr<MediaPeriod>& medi
   }
   maybeContinueLoading();
   dispatchTracksChanged();
+  dispatchChaptersChanged();
 }
 
 void AvLivePlayer::handleContinueLoadingRequested(const std::shared_ptr<MediaPeriod>& mediaPeriod) {
@@ -2557,6 +2620,7 @@ void AvLivePlayer::reselectTracksInternal() {
     msgHandler->sendEmptyMessage(MSG_DO_SOME_WORK);
   }
   dispatchTracksChanged();
+  dispatchChaptersChanged();
 }
 
 void AvLivePlayer::updateTrackSelectionPlaybackSpeed(const float playbackSpeed) const {

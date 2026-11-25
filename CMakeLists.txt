@@ -292,6 +292,7 @@ set(CORAL_PLAYBACK_TARGET playback)
 set(CORAL_PLAYBACK_PUBLIC_HDR_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 set(PUBLIC_HDRS
+    coral/playback/Chapters.h
     coral/playback/DefaultMediaClock.h
     coral/playback/LivePlayer.h
     coral/playback/LoadControl.h
