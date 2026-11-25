@@ -1560,6 +1560,18 @@ void AvLivePlayer::selectTrackInternal(const TrackSelectionRequest& request) {
       request.rendererIndex >= static_cast<int>(renderers.size())) {
     return;
   }
+  const auto mapped = selector->getCurrentMappedTrackInfo();
+  if (mapped == nullptr) {
+    return;
+  }
+  const auto groups = mapped->getTrackGroups(request.rendererIndex);
+  if (groups == nullptr || request.groupIndex < 0 || request.groupIndex >= groups->length()) {
+    return;
+  }
+  const auto group = groups->get(request.groupIndex);
+  if (group == nullptr || request.trackIndex < 0 || request.trackIndex >= group->length()) {
+    return;
+  }
   selector->setSelectionOverride(request.rendererIndex,
     SelectionOverride(request.groupIndex, request.trackIndex));
 }

@@ -41,6 +41,8 @@
 #include <CoreVideo/CoreVideo.h>
 #include <IOSurface/IOSurface.h>
 
+#include <cstdlib>
+
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -88,6 +90,7 @@ public:
   void onTracksChanged(const coral::Tracks& tracks) override {
     static_cast<void>(tracks);
     mTracksSeen.store(true, std::memory_order_release);
+    mTracksChangedCount.fetch_add(1, std::memory_order_acq_rel);
   }
 
   void onPlayerError(const std::string& errorMessage) override {
@@ -103,6 +106,9 @@ public:
   [[nodiscard]] bool tracksSeen() const {
     return mTracksSeen.load(std::memory_order_acquire);
   }
+  [[nodiscard]] int tracksChangedCount() const {
+    return mTracksChangedCount.load(std::memory_order_acquire);
+  }
   [[nodiscard]] bool failed() const { return mFailed.load(std::memory_order_acquire); }
   [[nodiscard]] std::string error() const {
     std::lock_guard<std::mutex> lock(mMutex);
@@ -113,6 +119,7 @@ private:
   std::atomic<bool> mReady{false};
   std::atomic<bool> mVideoSizeSeen{false};
   std::atomic<bool> mTracksSeen{false};
+  std::atomic<int> mTracksChangedCount{0};
   std::atomic<bool> mFailed{false};
   mutable std::mutex mMutex;
   std::string mError;
@@ -595,6 +602,8 @@ TEST(AppleLivePlayerEffectTest, ReportsTheAudioTrackWhenAudioIsEnabled) {
   const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/video720p_5s.mp4";
   auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = true});
   ASSERT_NE(player, nullptr);
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
   player->prepare();
   ASSERT_TRUE(waitFor([&] {
     return player->getPlaybackState() == coral::Player::State::STATE_READY ||
@@ -617,6 +626,62 @@ TEST(AppleLivePlayerEffectTest, ReportsTheAudioTrackWhenAudioIsEnabled) {
   }
   EXPECT_TRUE(hasAudio);
   EXPECT_TRUE(audioSelected);
+  player->release();
+}
+
+TEST(AppleLivePlayerEffectTest, SwitchesBetweenTwoAudioTracks) {
+  const char* path = std::getenv("CORAL_MULTI_AUDIO");
+  if (path == nullptr) {
+    GTEST_SKIP() << "set CORAL_MULTI_AUDIO to a two-audio-track MP4 to run this test";
+  }
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = true});
+  ASSERT_NE(player, nullptr);
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] {
+    return player->getPlaybackState() == coral::Player::State::STATE_READY ||
+           !player->getPlaybackErrorMessage().empty();
+  }, 10s)) << player->getPlaybackErrorMessage();
+  if (!player->getPlaybackErrorMessage().empty()) {
+    player->release();
+    GTEST_SKIP() << "audio playback is unavailable on this host: " << player->getPlaybackErrorMessage();
+  }
+
+  std::vector<coral::Track> audioTracks;
+  auto refreshAudioTracks = [&]() {
+    audioTracks.clear();
+    for (const auto& group : player->getCurrentTracks().groups) {
+      for (const auto& track : group.tracks) {
+        if (track.type == coral::TrackType::Audio) {
+          audioTracks.push_back(track);
+        }
+      }
+    }
+  };
+  auto selectedAudioTrack = [&]() -> int {
+    refreshAudioTracks();
+    for (size_t index = 0; index < audioTracks.size(); ++index) {
+      if (audioTracks[index].selected) {
+        return static_cast<int>(index);
+      }
+    }
+    return -1;
+  };
+  for (const auto& group : player->getCurrentTracks().groups) {
+    for (const auto& track : group.tracks) {
+      if (track.type == coral::TrackType::Audio) {
+        audioTracks.push_back(track);
+      }
+    }
+  }
+  ASSERT_GE(audioTracks.size(), 2u) << "the test asset must contain two audio tracks";
+  const auto target = audioTracks.front().selected ? audioTracks.back() : audioTracks.front();
+  player->selectTrack(target.rendererIndex, target.groupIndex, target.trackIndex);
+  EXPECT_TRUE(waitFor([&] { return selectedAudioTrack() == target.trackIndex; }, 5s))
+      << "the selector did not switch to audio track " << target.trackIndex;
+  player->clearTrackSelection(target.rendererIndex);
+
   player->release();
 }
 
