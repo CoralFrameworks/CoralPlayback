@@ -1171,6 +1171,56 @@ TEST(AppleLivePlayerEffectTest, BlendsAPartiallyTransparentPgsObject) {
   player->release();
 }
 
+TEST(AppleLivePlayerEffectTest, BlendsOverlappingSemiTransparentPgsObjects) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/pgs_alpha_layers_5s.mkv";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the PGS alpha-layers fixture is missing: " << path;
+  }
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  const auto surface = AppleIOSurface::create(320, 180, EffectPixelFormat::BGRA8);
+  ASSERT_NE(surface, nullptr);
+  const auto input = AppleVideoInput::createFrameInput(320, 180, 4);
+  ASSERT_NE(input, nullptr);
+  VideoEffectInput effectInput;
+  effectInput.inputNode = input;
+  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
+  player->setOutputSurface(surface);
+  player->setPreferredTextLanguage("eng");
+  const auto engine = player->getEffectEngine();
+  ASSERT_NE(engine, nullptr);
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] { return player->getPlaybackState() == coral::Player::State::STATE_READY; },
+                      10s)) << player->getPlaybackErrorMessage();
+  player->play();
+  ASSERT_TRUE(waitFor([&] { return probe->bitmapCueSeen(); }, 10s))
+      << "the alpha-layers PGS cue never reached the player events";
+  ASSERT_TRUE(waitFor([&] { return engine->isRunning() && engine->stats().frameCount > 0; }, 15s))
+      << engine->diagnostics();
+
+  // Red then blue, both at alpha 128, over black. The parser must alpha-composite the two PGS
+  // objects before the overlay blends the result over the video.
+  bool blended = false;
+  std::vector<uint8_t> pixel;
+  for (int attempt = 0; attempt < 100 && !blended; ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    pixel = pixelAt(surface->iosurface(), 160, 90);
+    // The overlay uploads the premultiplied caption bitmap, so over black the surface holds the
+    // premultiplied two-layer result: roughly BGRA (120, 8, 71, 255).
+    blended = pixel[0] >= 100 && pixel[0] <= 140 && pixel[2] >= 55 && pixel[2] <= 90 &&
+              pixel[1] <= 30;
+    if (!blended) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(blended) << "the PGS layer blend was not applied; BGRA="
+                       << static_cast<int>(pixel[0]) << "," << static_cast<int>(pixel[1]) << ","
+                       << static_cast<int>(pixel[2]) << "," << static_cast<int>(pixel[3]);
+  player->release();
+}
+
 TEST(AppleLivePlayerEffectTest, PlaysHdr10AndReportsItsColorInfo) {
   const char* const asset = std::getenv("CORAL_HDR_ASSET");
   if (asset == nullptr || !std::filesystem::exists(asset)) {
