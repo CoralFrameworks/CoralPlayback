@@ -434,6 +434,30 @@ const std::shared_ptr<MediaItem>& LivePlayer::getMediaItemAt(int index) const {
   return mImpl->getMediaItemAt(index);
 }
 
+int LivePlayer::getCurrentMediaItemIndex() const {
+  return mImpl->getCurrentMediaItemIndex();
+}
+
+int LivePlayer::getNextMediaItemIndex() const {
+  return mImpl->getNextMediaItemIndex();
+}
+
+int LivePlayer::getPreviousMediaItemIndex() const {
+  return mImpl->getPreviousMediaItemIndex();
+}
+
+void LivePlayer::seekToMediaItem(const int index) {
+  mImpl->seekToMediaItem(index);
+}
+
+void LivePlayer::seekToNextMediaItem() {
+  mImpl->seekToNextMediaItem();
+}
+
+void LivePlayer::seekToPreviousMediaItem() {
+  mImpl->seekToPreviousMediaItem();
+}
+
 void LivePlayer::addMediaItems(int index,
     const std::vector<std::shared_ptr<MediaItem>>& mediaItems) {
   mImpl->addMediaItems(index, mediaItems);

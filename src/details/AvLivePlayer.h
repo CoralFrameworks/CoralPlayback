@@ -302,6 +302,18 @@ public:
 
   [[nodiscard]] const std::shared_ptr<MediaItem>& getMediaItemAt(int index) const override;
 
+  [[nodiscard]] int getCurrentMediaItemIndex() const override;
+
+  [[nodiscard]] int getNextMediaItemIndex() const override;
+
+  [[nodiscard]] int getPreviousMediaItemIndex() const override;
+
+  void seekToMediaItem(int index) override;
+
+  void seekToNextMediaItem() override;
+
+  void seekToPreviousMediaItem() override;
+
   void addMediaItems(int index,
     const std::vector<std::shared_ptr<MediaItem>>& mediaItems) override;
 
@@ -417,6 +429,9 @@ private:
   void seekToCurrentPosition(bool sendDiscontinuity);
 
   void seekToInternal(int64_t timeUs);
+
+  /** Seeks to a window on the playback thread; kTimeUnset selects its default position. */
+  void seekToWindowInternal(int windowIndex, int64_t timeUs = Definitions::kTimeUnset);
 
   /**
    * Applies {@code seekToDefaultPosition()} on the playback thread.
@@ -825,6 +840,9 @@ private:
   static constexpr int MSG_SET_VIDEO_MIRROR = 30;
   static constexpr int MSG_VIDEO_COLOR_INFO_CHANGED = 31;
   static constexpr int MSG_SET_PREFERRED_AUDIO_LANGUAGE = 32;
+  static constexpr int MSG_SEEK_TO_MEDIA_ITEM = 33;
+  static constexpr int MSG_SEEK_TO_NEXT_MEDIA_ITEM = 34;
+  static constexpr int MSG_SEEK_TO_PREVIOUS_MEDIA_ITEM = 35;
 
   static constexpr int64_t ACTIVE_INTERVAL_MS = 10;
   static constexpr int64_t IDLE_INTERVAL_MS = 1000;

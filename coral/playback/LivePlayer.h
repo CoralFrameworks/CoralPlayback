@@ -409,6 +409,18 @@ public:
 
   [[nodiscard]] const std::shared_ptr<MediaItem>& getMediaItemAt(int index) const override;
 
+  [[nodiscard]] int getCurrentMediaItemIndex() const override;
+
+  [[nodiscard]] int getNextMediaItemIndex() const override;
+
+  [[nodiscard]] int getPreviousMediaItemIndex() const override;
+
+  void seekToMediaItem(int index) override;
+
+  void seekToNextMediaItem() override;
+
+  void seekToPreviousMediaItem() override;
+
   void addMediaItems(int index,
       const std::vector<std::shared_ptr<MediaItem>>& mediaItems) override;
 

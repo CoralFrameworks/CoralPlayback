@@ -615,6 +615,33 @@ int AvLivePlayer::getMediaItemCount() const {
   return playbackInfo.timeline != nullptr ? playbackInfo.timeline->getWindowCount() : 0;
 }
 
+int AvLivePlayer::getCurrentMediaItemIndex() const {
+  if (playbackInfo.timeline == nullptr || playbackInfo.timeline->isEmpty()) {
+    return 0;
+  }
+  auto period = std::make_shared<Timeline::Period>();
+  if (!playbackInfo.timeline->getPeriodByUid(playbackInfo.periodId.periodUid(), period)) {
+    return 0;
+  }
+  return period->windowIndex;
+}
+
+int AvLivePlayer::getNextMediaItemIndex() const {
+  if (playbackInfo.timeline == nullptr || playbackInfo.timeline->isEmpty()) {
+    return Definitions::kIndexUnset;
+  }
+  return playbackInfo.timeline->getNextWindowIndex(getCurrentMediaItemIndex(), repeatMode,
+    shuffleModeEnabled);
+}
+
+int AvLivePlayer::getPreviousMediaItemIndex() const {
+  if (playbackInfo.timeline == nullptr || playbackInfo.timeline->isEmpty()) {
+    return Definitions::kIndexUnset;
+  }
+  return playbackInfo.timeline->getPreviousWindowIndex(getCurrentMediaItemIndex(), repeatMode,
+    shuffleModeEnabled);
+}
+
 const std::shared_ptr<MediaItem>& AvLivePlayer::getMediaItemAt(const int index) const {
   static const std::shared_ptr<MediaItem> sEmptyItem = nullptr;
   if (playbackInfo.timeline == nullptr ||
@@ -627,6 +654,19 @@ const std::shared_ptr<MediaItem>& AvLivePlayer::getMediaItemAt(const int index) 
   const auto timelineWindow =
     playbackInfo.timeline->getWindow(index, std::make_shared<Timeline::Window>(), 0);
   return timelineWindow != nullptr ? timelineWindow->mediaItem : sEmptyItem;
+}
+
+void AvLivePlayer::seekToMediaItem(const int index) {
+  msgHandler->sendMessage(
+    Message::obtain(msgHandler, MSG_SEEK_TO_MEDIA_ITEM, WrapMessageData(index)));
+}
+
+void AvLivePlayer::seekToNextMediaItem() {
+  msgHandler->sendEmptyMessage(MSG_SEEK_TO_NEXT_MEDIA_ITEM);
+}
+
+void AvLivePlayer::seekToPreviousMediaItem() {
+  msgHandler->sendEmptyMessage(MSG_SEEK_TO_PREVIOUS_MEDIA_ITEM);
 }
 
 void AvLivePlayer::addMediaItems(int index,
@@ -810,12 +850,19 @@ void AvLivePlayer::seekToDefaultPositionInternal() {
 }
 
 void AvLivePlayer::seekToInternal(const int64_t timeUs) {
-  // The player holds a single-item playlist, so a seek always targets the first window.
-  pendingInitialSeekPosition = SeekPosition(playbackInfo.timeline, 0, timeUs);
-  if (playbackInfo.timeline->isEmpty()) {
+  seekToWindowInternal(getCurrentMediaItemIndex(), timeUs);
+}
+
+void AvLivePlayer::seekToWindowInternal(const int windowIndex, const int64_t timeUs) {
+  if (playbackInfo.timeline == nullptr || playbackInfo.timeline->isEmpty()) {
     // Nothing to resolve yet: the pending seek is resolved as soon as the timeline is available.
+    pendingInitialSeekPosition = SeekPosition(playbackInfo.timeline, windowIndex, timeUs);
     return;
   }
+  if (windowIndex < 0 || windowIndex >= playbackInfo.timeline->getWindowCount()) {
+    return;
+  }
+  pendingInitialSeekPosition = SeekPosition(playbackInfo.timeline, windowIndex, timeUs);
   // Re-resolving the playlist change with the pending seek position applies the seek: it resolves
   // the position in the timeline, seeks the media period and resets the renderer positions.
   handleMediaSourceListInfoRefreshed(mediaSourceList->createTimeline());
@@ -970,6 +1017,25 @@ bool AvLivePlayer::handleMessage(Message* msg) {
     }
     case MSG_SEEK_TO_DEFAULT_POSITION: {
       seekToDefaultPositionInternal();
+      break;
+    }
+    case MSG_SEEK_TO_MEDIA_ITEM: {
+      const int index = UseMessageData<int>(msg->msgData);
+      seekToWindowInternal(index, Definitions::kTimeUnset);
+      break;
+    }
+    case MSG_SEEK_TO_NEXT_MEDIA_ITEM: {
+      const int next = getNextMediaItemIndex();
+      if (next != Definitions::kIndexUnset) {
+        seekToWindowInternal(next, Definitions::kTimeUnset);
+      }
+      break;
+    }
+    case MSG_SEEK_TO_PREVIOUS_MEDIA_ITEM: {
+      const int previous = getPreviousMediaItemIndex();
+      if (previous != Definitions::kIndexUnset) {
+        seekToWindowInternal(previous, Definitions::kTimeUnset);
+      }
       break;
     }
     case MSG_PLAY: {

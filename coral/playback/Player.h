@@ -700,6 +700,32 @@ public:
    */
   [[nodiscard]] virtual const std::shared_ptr<MediaItem>& getMediaItemAt(int index) const = 0;
 
+  /** Returns the index of the current media item, or 0 when the playlist is empty. */
+  [[nodiscard]] virtual int getCurrentMediaItemIndex() const {
+    return 0;
+  }
+
+  /** Returns the media item that follows the current one, or -1 at the end of the playlist. */
+  [[nodiscard]] virtual int getNextMediaItemIndex() const {
+    return static_cast<int>(Definitions::kIndexUnset);
+  }
+
+  /** Returns the media item that precedes the current one, or -1 at the start. */
+  [[nodiscard]] virtual int getPreviousMediaItemIndex() const {
+    return static_cast<int>(Definitions::kIndexUnset);
+  }
+
+  /** Seeks to the default position of the media item at @p index. */
+  virtual void seekToMediaItem(int index) {
+    static_cast<void>(index);
+  }
+
+  /** Seeks to the default position of the next media item, if there is one. */
+  virtual void seekToNextMediaItem() {}
+
+  /** Seeks to the default position of the previous media item, if there is one. */
+  virtual void seekToPreviousMediaItem() {}
+
   /**
    * Adds media items to the playlist, starting at the given index.
    *

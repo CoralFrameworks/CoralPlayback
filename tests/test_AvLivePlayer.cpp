@@ -222,5 +222,35 @@ TEST(AvLivePlayerTest, KeepsThePitchOfThePlaybackParameters) {
   player->release();
 }
 
+TEST(AvLivePlayerTest, NavigatesAPlaylist) {
+  auto player = createPlayerWithoutRenderers();
+  player->prepare();
+  ASSERT_TRUE(waitFor(
+      [&] { return player->getPlaybackState() != Player::State::STATE_IDLE; }, kTimeout));
+  ASSERT_EQ(player->getMediaItemCount(), 1);
+  EXPECT_EQ(player->getCurrentMediaItemIndex(), 0);
+  EXPECT_EQ(player->getNextMediaItemIndex(), -1);
+  EXPECT_EQ(player->getPreviousMediaItemIndex(), -1);
+
+  player->addMediaItem(MediaItem::fromUrl("silence://second"));
+  ASSERT_TRUE(waitFor([&] { return player->getMediaItemCount() == 2; }, kTimeout));
+  EXPECT_EQ(player->getCurrentMediaItemIndex(), 0);
+  EXPECT_EQ(player->getNextMediaItemIndex(), 1);
+
+  player->seekToNextMediaItem();
+  ASSERT_TRUE(waitFor([&] { return player->getCurrentMediaItemIndex() == 1; }, kTimeout))
+      << "seekToNextMediaItem did not move to the second item";
+  EXPECT_EQ(player->getPreviousMediaItemIndex(), 0);
+
+  player->seekToPreviousMediaItem();
+  ASSERT_TRUE(waitFor([&] { return player->getCurrentMediaItemIndex() == 0; }, kTimeout))
+      << "seekToPreviousMediaItem did not return to the first item";
+
+  player->seekToMediaItem(1);
+  ASSERT_TRUE(waitFor([&] { return player->getCurrentMediaItemIndex() == 1; }, kTimeout))
+      << "seekToMediaItem did not move to the requested item";
+  player->release();
+}
+
 } // namespace anonymous
 } // namespace coral
