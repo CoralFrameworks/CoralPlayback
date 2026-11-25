@@ -920,6 +920,21 @@ TEST(AppleLivePlayerEffectTest, CompositesAPgsCueIntoTheOutputSurface) {
   EXPECT_TRUE(red) << "PGS bitmap was not composited; BGRA="
                    << static_cast<int>(pixel[0]) << "," << static_cast<int>(pixel[1]) << ","
                    << static_cast<int>(pixel[2]) << "," << static_cast<int>(pixel[3]);
+
+  // The second PGS display set replaces red with blue at 2 s.
+  ASSERT_TRUE(waitFor([&] { return player->getCurrentPositionUs() >= 2'200'000; }, 10s));
+  bool blue = false;
+  for (int attempt = 0; attempt < 100 && !blue; ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    pixel = centrePixel(surface->iosurface());
+    blue = pixel[0] >= 200 && pixel[2] <= 130;
+    if (!blue) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(blue) << "the PGS blue replacement was not composited; BGRA="
+                    << static_cast<int>(pixel[0]) << "," << static_cast<int>(pixel[1]) << ","
+                    << static_cast<int>(pixel[2]) << "," << static_cast<int>(pixel[3]);
   player->release();
 }
 
@@ -964,6 +979,21 @@ TEST(AppleLivePlayerEffectTest, CompositesAVobSubCueIntoTheOutputSurface) {
   EXPECT_TRUE(red) << "VobSub bitmap was not composited; BGRA="
                    << static_cast<int>(pixel[0]) << "," << static_cast<int>(pixel[1]) << ","
                    << static_cast<int>(pixel[2]) << "," << static_cast<int>(pixel[3]);
+
+  // The second SPU replaces red with green at 3 s.
+  ASSERT_TRUE(waitFor([&] { return player->getCurrentPositionUs() >= 3'200'000; }, 10s));
+  bool green = false;
+  for (int attempt = 0; attempt < 100 && !green; ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    pixel = centrePixel(surface->iosurface());
+    green = pixel[1] >= 200 && pixel[2] <= 130;
+    if (!green) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(green) << "the VobSub green replacement was not composited; BGRA="
+                     << static_cast<int>(pixel[0]) << "," << static_cast<int>(pixel[1]) << ","
+                     << static_cast<int>(pixel[2]) << "," << static_cast<int>(pixel[3]);
   player->release();
 }
 
