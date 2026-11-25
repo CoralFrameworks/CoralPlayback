@@ -1394,6 +1394,67 @@ TEST(AppleLivePlayerEffectTest, CompositesFourPgsLayersWithDifferentCrops) {
   player->release();
 }
 
+TEST(AppleLivePlayerEffectTest, RedrawsASemiTransparentPgsObjectWithANewPalette) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/pgs_alpha_palette_5s.mkv";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the alpha palette fixture is missing: " << path;
+  }
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  const auto surface = AppleIOSurface::create(320, 180, EffectPixelFormat::BGRA8);
+  ASSERT_NE(surface, nullptr);
+  const auto input = AppleVideoInput::createFrameInput(320, 180, 4);
+  ASSERT_NE(input, nullptr);
+  VideoEffectInput effectInput;
+  effectInput.inputNode = input;
+  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
+  player->setOutputSurface(surface);
+  player->setPreferredTextLanguage("eng");
+  const auto engine = player->getEffectEngine();
+  ASSERT_NE(engine, nullptr);
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] { return player->getPlaybackState() == coral::Player::State::STATE_READY; },
+                      10s)) << player->getPlaybackErrorMessage();
+  player->play();
+  ASSERT_TRUE(waitFor([&] { return probe->bitmapCueSeen(); }, 10s))
+      << "the alpha palette cue never reached the player events";
+  ASSERT_TRUE(waitFor([&] { return engine->isRunning() && engine->stats().frameCount > 0; }, 15s))
+      << engine->diagnostics();
+
+  // First display set: 50% red. The later display set is palette-only (no ODS), so the same
+  // object must be redrawn blue while keeping alpha 128.
+  bool red = false;
+  std::vector<uint8_t> pixel;
+  for (int attempt = 0; attempt < 100 && !red; ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    pixel = pixelAt(surface->iosurface(), 160, 90);
+    red = pixel[2] >= 90 && pixel[2] <= 170 && pixel[0] <= 60 && pixel[1] <= 60;
+    if (!red) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(red) << "the first 50% red object was not composited; BGRA="
+                   << static_cast<int>(pixel[0]) << "," << static_cast<int>(pixel[1]) << ","
+                   << static_cast<int>(pixel[2]) << "," << static_cast<int>(pixel[3]);
+
+  ASSERT_TRUE(waitFor([&] { return player->getCurrentPositionUs() >= 2'200'000; }, 10s));
+  bool blue = false;
+  for (int attempt = 0; attempt < 100 && !blue; ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    pixel = pixelAt(surface->iosurface(), 160, 90);
+    blue = pixel[0] >= 90 && pixel[0] <= 170 && pixel[1] <= 60 && pixel[2] <= 60;
+    if (!blue) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(blue) << "the palette-only redraw was not composited; BGRA="
+                    << static_cast<int>(pixel[0]) << "," << static_cast<int>(pixel[1]) << ","
+                    << static_cast<int>(pixel[2]) << "," << static_cast<int>(pixel[3]);
+  player->release();
+}
+
 TEST(AppleLivePlayerEffectTest, PlaysHdr10AndReportsItsColorInfo) {
   const char* const asset = std::getenv("CORAL_HDR_ASSET");
   if (asset == nullptr || !std::filesystem::exists(asset)) {
