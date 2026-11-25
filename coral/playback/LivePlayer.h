@@ -47,6 +47,14 @@ public:
   struct Configuration {
     /** Build the audio renderer and open an output device. */
     bool audioEnabled = true;
+    /**
+     * How many audio renderers to build.
+     *
+     * <p>The default is one. A caller that wants a renderer per audio track can ask for more; only
+     * the renderer that owns the selected track is enabled, so the extra ones are prepared but do
+     * not output simultaneously.
+     */
+    int audioRendererCount = 1;
     /** Build the video renderer. */
     bool videoEnabled = true;
     /** Build the still-image renderer. */

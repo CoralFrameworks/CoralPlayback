@@ -748,6 +748,59 @@ TEST(AppleVideoFrameSourceTest, ImportsTheOutputSurfaceIntoTheUiDevice) {
   engine->stop();
 }
 
+TEST(AppleLivePlayerEffectTest, SwitchesBetweenMultipleAudioRenderers) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/multi_audio_5s.mp4";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the two-audio-track fixture is missing: " << path;
+  }
+  auto player = LivePlayer::create(
+      path, LivePlayer::Configuration{.audioEnabled = true, .audioRendererCount = 2});
+  ASSERT_NE(player, nullptr);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] {
+    return player->getPlaybackState() == coral::Player::State::STATE_READY ||
+           !player->getPlaybackErrorMessage().empty();
+  }, 10s)) << player->getPlaybackErrorMessage();
+  if (!player->getPlaybackErrorMessage().empty()) {
+    player->release();
+    GTEST_SKIP() << "audio playback is unavailable on this host: " << player->getPlaybackErrorMessage();
+  }
+
+  auto audioTracks = [&]() {
+    std::vector<coral::Track> tracks;
+    for (const auto& group : player->getCurrentTracks().groups) {
+      for (const auto& track : group.tracks) {
+        if (track.type == coral::TrackType::Audio) {
+          tracks.push_back(track);
+        }
+      }
+    }
+    return tracks;
+  };
+  const auto initialTracks = audioTracks();
+  ASSERT_GE(initialTracks.size(), 2u);
+  const auto target = std::find_if(initialTracks.begin(), initialTracks.end(),
+      [&](const coral::Track& track) { return !track.selected; });
+  ASSERT_NE(target, initialTracks.end());
+  player->selectTrack(target->rendererIndex, target->groupIndex, target->trackIndex);
+  ASSERT_TRUE(waitFor([&] {
+    const auto tracks = audioTracks();
+    int selected = 0;
+    bool targetSelected = false;
+    for (const auto& track : tracks) {
+      if (track.selected) {
+        ++selected;
+        targetSelected = track.rendererIndex == target->rendererIndex &&
+                         track.groupIndex == target->groupIndex &&
+                         track.trackIndex == target->trackIndex;
+      }
+    }
+    return selected == 1 && targetSelected;
+  }, 5s)) << "selecting a track did not activate exactly its audio renderer";
+
+  player->release();
+}
+
 // ==================================================================================================
 // The player drives the IOSurface output
 // ==================================================================================================

@@ -133,6 +133,23 @@ AvLivePlayer::AvLivePlayer(const std::vector<std::shared_ptr<Renderer>>& rendere
   });
   msgHandler = EventHandler::create(msgThread->getLooper(), callbackRef);
 
+  // A player built with several audio renderers prepares them all, but only one may be enabled at a
+  // time; otherwise the selector would select an audio track for every renderer and all of them would
+  // output together. Keep the first and disable the rest until selectTrack() names another one.
+  if (auto selector = std::dynamic_pointer_cast<DefaultTrackSelector>(trackSelector);
+      selector != nullptr) {
+    bool firstAudio = true;
+    for (size_t index = 0; index < renderers.size(); ++index) {
+      if (renderers[index] != nullptr && renderers[index]->getMediaType() == MediaType::kMediaTypeAudio) {
+        if (firstAudio) {
+          firstAudio = false;
+        } else {
+          selector->setRendererDisabled(static_cast<int>(index), true);
+        }
+      }
+    }
+  }
+
   // The renderers hold a reference to this player as their video size listener. It is non-owning for
   // the same reason as `callbackRef`: the player belongs to its caller.
   videoSizeListenerRef = std::shared_ptr<VideoSizeListener>(this, [](VideoSizeListener*) {
@@ -864,6 +881,9 @@ void AvLivePlayer::setVideoColorInfoInternal(const VideoColorInfo& colorInfo) {
   {
     const std::lock_guard<Mutex> lock(outputLock);
     videoColorInfo = colorInfo;
+    // A UI may read the frame snapshot immediately after this event; do not wait for the next render
+    // tick to attach the colour description.
+    videoFrameOutput.colorInfo = colorInfo;
   }
   dispatchPlayerEvent([colorInfo](EventListener& listener) {
     listener.onVideoColorInfoChanged(colorInfo);
@@ -1621,6 +1641,19 @@ void AvLivePlayer::selectTrackInternal(const TrackSelectionRequest& request) {
   const auto group = groups->get(request.groupIndex);
   if (group == nullptr || request.trackIndex < 0 || request.trackIndex >= group->length()) {
     return;
+  }
+  // An explicit audio selection also chooses which audio renderer is active. The other audio
+  // renderers remain prepared but disabled, so they never produce a second simultaneous output.
+  if (request.rendererIndex >= 0 && request.rendererIndex < static_cast<int>(renderers.size()) &&
+      renderers[request.rendererIndex] != nullptr &&
+      renderers[request.rendererIndex]->getMediaType() == MediaType::kMediaTypeAudio) {
+    for (size_t index = 0; index < renderers.size(); ++index) {
+      if (renderers[index] != nullptr &&
+          renderers[index]->getMediaType() == MediaType::kMediaTypeAudio) {
+        selector->setRendererDisabled(static_cast<int>(index),
+          static_cast<int>(index) != request.rendererIndex);
+      }
+    }
   }
   selector->setSelectionOverride(request.rendererIndex,
     SelectionOverride(request.groupIndex, request.trackIndex));

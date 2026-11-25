@@ -35,7 +35,10 @@ std::vector<std::shared_ptr<Renderer>> createRenderers(
     const LivePlayer::Configuration& configuration) {
   auto renderers = std::vector<std::shared_ptr<Renderer>>();
   if (configuration.audioEnabled) {
-    renderers.push_back(std::make_shared<DecodeAudioRenderer>());
+    const int count = configuration.audioRendererCount > 0 ? configuration.audioRendererCount : 1;
+    for (int index = 0; index < count; ++index) {
+      renderers.push_back(std::make_shared<DecodeAudioRenderer>());
+    }
   }
   if (configuration.videoEnabled) {
     renderers.push_back(std::make_shared<DecodeVideoRenderer>());
