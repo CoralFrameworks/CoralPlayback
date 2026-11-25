@@ -1221,6 +1221,106 @@ TEST(AppleLivePlayerEffectTest, BlendsOverlappingSemiTransparentPgsObjects) {
   player->release();
 }
 
+TEST(AppleLivePlayerEffectTest, BlendsThreeSemiTransparentPgsLayers) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/pgs_alpha_three.mkv";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the PGS three-layer fixture is missing: " << path;
+  }
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  const auto surface = AppleIOSurface::create(320, 180, EffectPixelFormat::BGRA8);
+  ASSERT_NE(surface, nullptr);
+  const auto input = AppleVideoInput::createFrameInput(320, 180, 4);
+  ASSERT_NE(input, nullptr);
+  VideoEffectInput effectInput;
+  effectInput.inputNode = input;
+  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
+  player->setOutputSurface(surface);
+  player->setPreferredTextLanguage("eng");
+  const auto engine = player->getEffectEngine();
+  ASSERT_NE(engine, nullptr);
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] { return player->getPlaybackState() == coral::Player::State::STATE_READY; },
+                      10s)) << player->getPlaybackErrorMessage();
+  player->play();
+  ASSERT_TRUE(waitFor([&] { return probe->bitmapCueSeen(); }, 10s))
+      << "the three-layer PGS cue never reached the player events";
+  ASSERT_TRUE(waitFor([&] { return engine->isRunning() && engine->stats().frameCount > 0; }, 15s))
+      << engine->diagnostics();
+
+  // Red, green and blue at 50% alpha, in PCS order, over black. The premultiplied surface result
+  // is approximately BGRA (128, 64, 0, 255).
+  bool blended = false;
+  std::vector<uint8_t> pixel;
+  for (int attempt = 0; attempt < 100 && !blended; ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    pixel = pixelAt(surface->iosurface(), 160, 90);
+    blended = pixel[0] >= 110 && pixel[0] <= 145 && pixel[1] >= 40 && pixel[1] <= 85 &&
+              pixel[2] >= 30 && pixel[2] <= 80;
+    if (!blended) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(blended) << "the three PGS layers were not blended; BGRA="
+                       << static_cast<int>(pixel[0]) << "," << static_cast<int>(pixel[1]) << ","
+                       << static_cast<int>(pixel[2]) << "," << static_cast<int>(pixel[3]);
+  player->release();
+}
+
+TEST(AppleLivePlayerEffectTest, CompositesACroppedSemiTransparentPgsObject) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/pgs_alpha_crop.mkv";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the PGS alpha-crop fixture is missing: " << path;
+  }
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  const auto surface = AppleIOSurface::create(320, 180, EffectPixelFormat::BGRA8);
+  ASSERT_NE(surface, nullptr);
+  const auto input = AppleVideoInput::createFrameInput(320, 180, 4);
+  ASSERT_NE(input, nullptr);
+  VideoEffectInput effectInput;
+  effectInput.inputNode = input;
+  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
+  player->setOutputSurface(surface);
+  player->setPreferredTextLanguage("eng");
+  const auto engine = player->getEffectEngine();
+  ASSERT_NE(engine, nullptr);
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] { return player->getPlaybackState() == coral::Player::State::STATE_READY; },
+                      10s)) << player->getPlaybackErrorMessage();
+  player->play();
+  ASSERT_TRUE(waitFor([&] { return probe->bitmapCueSeen(); }, 10s))
+      << "the cropped alpha PGS cue never reached the player events";
+  ASSERT_TRUE(waitFor([&] { return engine->isRunning() && engine->stats().frameCount > 0; }, 15s))
+      << engine->diagnostics();
+
+  // The 4x4 red object is cropped to 2x2 and clipped by a 2x2 window at (2,2) in an 8x8 plane.
+  // The visible area is x 80..160, y 45..90; outside it the black video remains.
+  bool insideRed = false;
+  bool outsideBlack = false;
+  std::vector<uint8_t> inside;
+  std::vector<uint8_t> outside;
+  for (int attempt = 0; attempt < 100 && (!insideRed || !outsideBlack); ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    inside = pixelAt(surface->iosurface(), 100, 60);
+    outside = pixelAt(surface->iosurface(), 20, 60);
+    insideRed = inside[2] >= 90 && inside[2] <= 170 && inside[0] <= 60 && inside[1] <= 60;
+    outsideBlack = outside[0] <= 20 && outside[1] <= 20 && outside[2] <= 20;
+    if (!insideRed || !outsideBlack) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(insideRed) << "cropped alpha object; BGRA=" << static_cast<int>(inside[0]) << ","
+                         << static_cast<int>(inside[1]) << "," << static_cast<int>(inside[2]);
+  EXPECT_TRUE(outsideBlack) << "outside window; BGRA=" << static_cast<int>(outside[0]) << ","
+                            << static_cast<int>(outside[1]) << "," << static_cast<int>(outside[2]);
+  player->release();
+}
+
 TEST(AppleLivePlayerEffectTest, PlaysHdr10AndReportsItsColorInfo) {
   const char* const asset = std::getenv("CORAL_HDR_ASSET");
   if (asset == nullptr || !std::filesystem::exists(asset)) {
