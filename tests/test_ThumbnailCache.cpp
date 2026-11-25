@@ -33,6 +33,45 @@ std::shared_ptr<PixelBuffer> makeFrame() {
   return PixelBuffer::fromAVPixelBuffer(pixels);
 }
 
+/**
+ * A provider shaped like the Apple/Windows ones: only the most recent request is kept, so a caller
+ * that fires several requests concurrently silently loses the earlier ones.
+ */
+class LatestOnlyThumbnailProvider final : public ThumbnailProvider {
+public:
+  void requestThumbnail(const int64_t positionUs, Callback callback) override {
+    const std::lock_guard<std::mutex> lock(mMutex);
+    ++mRequests;
+    mLastPosition = positionUs;
+    mLast = std::move(callback);
+  }
+
+  void completeLast() {
+    Callback callback;
+    {
+      const std::lock_guard<std::mutex> lock(mMutex);
+      callback = std::move(mLast);
+    }
+    if (callback) {
+      Thumbnail thumbnail;
+      thumbnail.positionUs = mLastPosition;
+      thumbnail.frame = makeFrame();
+      callback(std::move(thumbnail));
+    }
+  }
+
+  int requests() const {
+    const std::lock_guard<std::mutex> lock(mMutex);
+    return mRequests;
+  }
+
+private:
+  mutable std::mutex mMutex;
+  int mRequests = 0;
+  int64_t mLastPosition = 0;
+  Callback mLast;
+};
+
 class FakeThumbnailProvider final : public ThumbnailProvider {
 public:
   void requestThumbnail(const int64_t positionUs, Callback callback) override {
@@ -167,6 +206,29 @@ TEST(ThumbnailCacheTest, PrefetchWarmsTheCacheWithoutACallback) {
   cache->requestThumbnail(2'100'000, [&](Thumbnail) { ++delivered; });
   EXPECT_EQ(delivered, 1);
   EXPECT_EQ(source->requests(), before) << "the prefetched bucket should be served from cache";
+}
+
+TEST(ThumbnailCacheTest, DoesNotDropUserRequestsBehindPrefetches) {
+  auto source = std::make_shared<LatestOnlyThumbnailProvider>();
+  auto cache = CachingThumbnailProvider::create(
+    source, ThumbnailCacheConfig{.prefetchBefore = 0, .prefetchAfter = 0});
+  ASSERT_NE(cache, nullptr);
+
+  cache->prefetch(5'000'000);
+  int delivered = 0;
+  cache->requestThumbnail(6'000'000, [&](Thumbnail) { ++delivered; });
+  // The cache is serial, so the prefetch must complete before the user request is issued.
+  source->completeLast();
+  source->completeLast();
+  EXPECT_EQ(delivered, 1);
+
+  // A request for a neighbouring bucket must still get a turn; a concurrent implementation would
+  // have left the prefetch pending entries stuck because the provider only kept the last one.
+  int neighbourDelivered = 0;
+  cache->requestThumbnail(4'000'000, [&](Thumbnail) { ++neighbourDelivered; });
+  source->completeLast();
+  EXPECT_EQ(neighbourDelivered, 1);
+  EXPECT_GE(source->requests(), 3);
 }
 
 } // namespace

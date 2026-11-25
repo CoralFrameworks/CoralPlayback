@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <deque>
 #include <map>
 #include <set>
 #include <mutex>
@@ -59,7 +60,7 @@ struct CachingThumbnailProvider::Impl : public std::enable_shared_from_this<Cach
 
   struct Pending {
     std::vector<Callback> callbacks;
-    bool started = false;
+    bool prefetch = false;
   };
 
   int64_t bucketOf(const int64_t positionUs) const {
@@ -85,31 +86,37 @@ struct CachingThumbnailProvider::Impl : public std::enable_shared_from_this<Cach
     }
   }
 
-  void finish(const int64_t bucket, const uint64_t requestGeneration, Thumbnail thumbnail,
-              const bool prefetch) {
+  void finish(const int64_t bucket, const uint64_t requestGeneration, Thumbnail thumbnail) {
     std::vector<Callback> callbacks;
+    bool wasPrefetch = false;
     {
       const std::lock_guard<std::mutex> lock(mutex);
       if (requestGeneration != generation) {
         return;
       }
+      if (sourceBusyBucket == bucket) {
+        sourceBusy = false;
+        sourceBusyBucket = -1;
+      }
       const auto pendingIt = pending.find(bucket);
       if (pendingIt == pending.end()) {
-        return;
-      }
-      callbacks = std::move(pendingIt->second.callbacks);
-      pending.erase(pendingIt);
-      if (thumbnail.frame != nullptr) {
-        Entry entry;
-        entry.thumbnail = thumbnail;
-        entry.lastUse = ++tick;
-        cache[bucket] = std::move(entry);
-        evictLocked();
-      } else if (prefetch) {
-        failedPrefetches.insert(bucket);
-      }
-      if (prefetch) {
-        ++stats.prefetches;
+        // A stale callback for a bucket that was cancelled or removed; continue with the queue.
+      } else {
+        wasPrefetch = pendingIt->second.prefetch;
+        callbacks = std::move(pendingIt->second.callbacks);
+        pending.erase(pendingIt);
+        if (thumbnail.frame != nullptr) {
+          Entry entry;
+          entry.thumbnail = thumbnail;
+          entry.lastUse = ++tick;
+          cache[bucket] = std::move(entry);
+          evictLocked();
+        } else if (wasPrefetch) {
+          failedPrefetches.insert(bucket);
+        }
+        if (wasPrefetch) {
+          ++stats.prefetches;
+        }
       }
     }
     for (auto& callback : callbacks) {
@@ -117,18 +124,68 @@ struct CachingThumbnailProvider::Impl : public std::enable_shared_from_this<Cach
         callback(thumbnail);
       }
     }
+    startNext();
+  }
+
+  void startNext() {
+    int64_t bucket = 0;
+    uint64_t requestGeneration = 0;
+    {
+      const std::lock_guard<std::mutex> lock(mutex);
+      if (sourceBusy || queue.empty()) {
+        return;
+      }
+      while (!queue.empty()) {
+        bucket = queue.front();
+        queue.pop_front();
+        if (pending.find(bucket) != pending.end()) {
+          break;
+        }
+      }
+      if (pending.find(bucket) == pending.end()) {
+        return;
+      }
+      sourceBusy = true;
+      sourceBusyBucket = bucket;
+      requestGeneration = generation;
+    }
+    auto self = shared_from_this();
+    provider->requestThumbnail(positionOf(bucket),
+      [self, bucket, requestGeneration](Thumbnail thumbnail) {
+        self->finish(bucket, requestGeneration, std::move(thumbnail));
+      });
+  }
+
+  void enqueueLocked(const int64_t bucket, Callback callback, const bool prefetch) {
+    auto& waiting = pending[bucket];
+    if (callback) {
+      waiting.callbacks.push_back(std::move(callback));
+    }
+    if (!prefetch) {
+      waiting.prefetch = false;
+    }
+    // User requests go ahead of every queued prefetch. A bucket that is already in flight stays
+    // where it is; its result will be shared with the new callback.
+    if (sourceBusyBucket != bucket) {
+      const auto queued = std::find(queue.begin(), queue.end(), bucket);
+      if (queued != queue.end()) {
+        queue.erase(queued);
+      }
+      if (prefetch) {
+        queue.push_back(bucket);
+      } else {
+        queue.push_front(bucket);
+      }
+    }
   }
 
   void requestInternal(const int64_t positionUs, Callback callback, const bool prefetch,
                        const bool allowPrefetch) {
     const int64_t bucket = bucketOf(positionUs);
-    bool start = false;
-    bool servedFromCache = false;
-    uint64_t requestGeneration = 0;
     Thumbnail cachedThumbnail;
+    bool servedFromCache = false;
     {
       const std::lock_guard<std::mutex> lock(mutex);
-      requestGeneration = generation;
       if (config.capacity > 0) {
         const auto cached = cache.find(bucket);
         if (cached != cache.end()) {
@@ -140,16 +197,12 @@ struct CachingThumbnailProvider::Impl : public std::enable_shared_from_this<Cach
       }
       if (!servedFromCache) {
         ++stats.misses;
-        auto& waiting = pending[bucket];
-        if (waiting.started) {
+        if (pending.find(bucket) != pending.end()) {
           ++stats.coalesced;
         }
-        if (callback) {
-          waiting.callbacks.push_back(std::move(callback));
-        }
-        if (!waiting.started) {
-          waiting.started = true;
-          start = true;
+        enqueueLocked(bucket, std::move(callback), prefetch);
+        if (allowPrefetch && !prefetch) {
+          schedulePrefetchLocked(bucket);
         }
       }
     }
@@ -159,54 +212,28 @@ struct CachingThumbnailProvider::Impl : public std::enable_shared_from_this<Cach
       }
       return;
     }
-    if (!start) {
-      return;
-    }
-
-    if (allowPrefetch) {
-      schedulePrefetch(bucket);
-    }
-    auto self = shared_from_this();
-    provider->requestThumbnail(positionOf(bucket), [self, bucket, requestGeneration, prefetch](
-                                                     Thumbnail thumbnail) {
-      self->finish(bucket, requestGeneration, std::move(thumbnail), prefetch);
-    });
+    startNext();
   }
 
-  void schedulePrefetch(const int64_t requestedBucket) {
-    std::vector<int64_t> targets;
-    {
-      const std::lock_guard<std::mutex> lock(mutex);
-      for (int offset = -config.prefetchBefore; offset <= config.prefetchAfter; ++offset) {
-        if (offset == 0) {
-          continue;
-        }
-        const int64_t bucket = requestedBucket + offset * (config.prefetchStepUs / config.bucketUs);
-        if (bucket < 0) {
-          continue;
-        }
-        if (config.capacity > 0 && cache.find(bucket) != cache.end()) {
-          continue;
-        }
-        if (pending.find(bucket) != pending.end() ||
-            failedPrefetches.find(bucket) != failedPrefetches.end()) {
-          continue;
-        }
-        pending[bucket].started = true;
-        targets.push_back(bucket);
+  void schedulePrefetchLocked(const int64_t requestedBucket) {
+    for (int offset = -config.prefetchBefore; offset <= config.prefetchAfter; ++offset) {
+      if (offset == 0) {
+        continue;
       }
-    }
-    for (const int64_t bucket : targets) {
-      uint64_t requestGeneration = 0;
-      {
-        const std::lock_guard<std::mutex> lock(mutex);
-        requestGeneration = generation;
+      const int64_t bucket =
+        requestedBucket + offset * (config.prefetchStepUs / config.bucketUs);
+      if (bucket < 0) {
+        continue;
       }
-      auto self = shared_from_this();
-      provider->requestThumbnail(positionOf(bucket), [self, bucket, requestGeneration](
-                                                        Thumbnail thumbnail) {
-        self->finish(bucket, requestGeneration, std::move(thumbnail), true);
-      });
+      if (config.capacity > 0 && cache.find(bucket) != cache.end()) {
+        continue;
+      }
+      if (pending.find(bucket) != pending.end() ||
+          failedPrefetches.find(bucket) != failedPrefetches.end()) {
+        continue;
+      }
+      pending[bucket].prefetch = true;
+      queue.push_back(bucket);
     }
   }
 
@@ -216,6 +243,9 @@ struct CachingThumbnailProvider::Impl : public std::enable_shared_from_this<Cach
   std::unordered_map<int64_t, Entry> cache;
   std::unordered_map<int64_t, Pending> pending;
   std::set<int64_t> failedPrefetches;
+  std::deque<int64_t> queue;
+  bool sourceBusy = false;
+  int64_t sourceBusyBucket = -1;
   uint64_t tick = 0;
   uint64_t generation = 0;
   ThumbnailCacheStats stats;
@@ -250,6 +280,9 @@ void CachingThumbnailProvider::cancel() {
     const std::lock_guard<std::mutex> lock(mImpl->mutex);
     ++mImpl->generation;
     mImpl->pending.clear();
+    mImpl->queue.clear();
+    mImpl->sourceBusy = false;
+    mImpl->sourceBusyBucket = -1;
     mImpl->cache.clear();
     mImpl->failedPrefetches.clear();
   }
