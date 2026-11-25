@@ -16,6 +16,10 @@
 
 #include <coral/playback/apple/AppleVideoInput.h>
 
+#include <coral/playback/apple/AppleHardwareVideoSurface.h>
+
+#include "AppleVideoFrameSink.h"
+
 #include <effect/VideoFrameInputNode.h>
 #include <effect/platform/apple/AppleIOSurfaceInputNode.h>
 
@@ -30,6 +34,25 @@ std::shared_ptr<EffectInputNode> AppleVideoInput::createFrameInput(const uint32_
   // hand it a small size and let the first decoded frame settle the real one.
   return VideoFrameInputNode::create(width == 0 ? 2 : width, height == 0 ? 2 : height,
                                      queueDepth == 0 ? 4 : queueDepth);
+}
+
+VideoEffectInput AppleVideoInput::createZeroCopyInput(const uint32_t width, const uint32_t height,
+                                                       const uint32_t queueDepth) {
+  VideoEffectInput input;
+  if (width == 0 || height == 0) {
+    return input;
+  }
+  const auto node = AppleIOSurfaceInputNode::create(width, height, EffectPixelFormat::BGRA8,
+                                                    queueDepth == 0 ? 4 : queueDepth);
+  const auto decoderSurface = AppleHardwareVideoSurface::create();
+  const auto sink = AppleVideoFrameSink::create(node, width, height);
+  if (node == nullptr || decoderSurface == nullptr || sink == nullptr) {
+    return input;
+  }
+  input.inputNode = node;
+  input.decoderSurface = decoderSurface;
+  input.frameSink = sink;
+  return input;
 }
 
 std::shared_ptr<EffectInputNode> AppleVideoInput::createIOSurfaceInput(

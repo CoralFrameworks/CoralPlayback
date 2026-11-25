@@ -17,6 +17,8 @@
 #ifndef CORAL_PLAYBACK_APPLE_APPLE_VIDEO_INPUT_H
 #define CORAL_PLAYBACK_APPLE_APPLE_VIDEO_INPUT_H
 
+#include <coral/playback/VideoFrameSink.h>
+
 #include <effect/EffectInputNode.h>
 #include <effect/EffectTypes.h>
 
@@ -63,6 +65,22 @@ public:
    */
   static std::shared_ptr<EffectInputNode> createFrameInput(uint32_t width, uint32_t height,
                                                             uint32_t queueDepth = 4);
+
+  /**
+   * Creates the zero-copy aggregate: an `AppleIOSurfaceInputNode`, the hardware decoder surface and
+   * the Apple `VideoFrameSink`.
+   *
+   * <p>VideoToolbox produces a bi-planar NV12 `CVPixelBuffer` today; the sink converts it to one
+   * BGRA IOSurface on the GPU (VideoToolbox's pixel transfer session) and submits that surface. The
+   * decoder surface and the pixels never visit the CPU. When the input node grows a bi-planar path,
+   * the conversion ring can be removed without changing this entry point.
+   *
+   * @param width      frame width in pixels.
+   * @param height     frame height in pixels.
+   * @param queueDepth how many frames may wait for the render thread; 0 chooses the node default.
+   */
+  static VideoEffectInput createZeroCopyInput(uint32_t width, uint32_t height,
+                                              uint32_t queueDepth = 4);
 
   /**
    * Creates the zero-copy input for a single-plane RGBA/BGRA IOSurface.

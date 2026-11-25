@@ -24,6 +24,7 @@
 
 #include <coral/playback/LivePlayer.h>
 #include <coral/playback/VideoOutput.h>
+#include <coral/playback/apple/AppleHardwareVideoSurface.h>
 #include <coral/playback/apple/AppleIOSurface.h>
 #include <coral/playback/apple/AppleVideoInput.h>
 #include <coral/playback/apple/AppleVideoOutputNodeFactory.h>
@@ -215,6 +216,37 @@ TEST(AppleVideoInputTest, RejectsAZeroCopyInputWithoutASurface) {
   EXPECT_EQ(AppleVideoInput::createIOSurfaceInput(nullptr), nullptr);
 }
 
+TEST(AppleVideoInputTest, CreatesTheZeroCopyAggregate) {
+  const auto input = AppleVideoInput::createZeroCopyInput(320, 180);
+  ASSERT_NE(input.inputNode, nullptr);
+  ASSERT_NE(input.decoderSurface, nullptr);
+  ASSERT_NE(input.frameSink, nullptr);
+  EXPECT_NE(std::dynamic_pointer_cast<AppleIOSurfaceInputNode>(input.inputNode), nullptr);
+  EXPECT_TRUE(input.decoderSurface->isValid());
+
+  const auto zero = AppleVideoInput::createZeroCopyInput(0, 180);
+  EXPECT_EQ(zero.inputNode, nullptr);
+  EXPECT_EQ(zero.decoderSurface, nullptr);
+  EXPECT_EQ(zero.frameSink, nullptr);
+}
+
+// ==================================================================================================
+// The hardware decoder surface
+// ==================================================================================================
+
+TEST(AppleHardwareVideoSurfaceTest, RequestsHardwareFramesWithoutADevice) {
+  const auto surface = AppleHardwareVideoSurface::create();
+  ASSERT_NE(surface, nullptr);
+  EXPECT_TRUE(surface->isValid());
+  EXPECT_EQ(surface->getNativeDevice(), nullptr);
+  EXPECT_EQ(surface->getInstance(), nullptr);
+
+  auto* const device = reinterpret_cast<void*>(static_cast<uintptr_t>(0x1234));
+  const auto withDevice = AppleHardwareVideoSurface::create(device);
+  ASSERT_NE(withDevice, nullptr);
+  EXPECT_EQ(withDevice->getNativeDevice(), device);
+}
+
 // ==================================================================================================
 // The output factory
 // ==================================================================================================
@@ -395,6 +427,57 @@ TEST(AppleLivePlayerEffectTest, RendersARealVideoIntoTheOutputSurface) {
   EXPECT_EQ(surface->width(), 320u);
   EXPECT_EQ(surface->height(), 180u);
 
+  player->release();
+}
+
+TEST(AppleLivePlayerEffectTest, SamplesTheDecodersSurfaceThroughTheAppleSink) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/video720p_5s.mp4";
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+
+  const auto surface = AppleIOSurface::create(320, 180, EffectPixelFormat::BGRA8);
+  ASSERT_NE(surface, nullptr);
+
+  const auto effectInput = AppleVideoInput::createZeroCopyInput(320, 180);
+  ASSERT_NE(effectInput.inputNode, nullptr);
+  ASSERT_NE(effectInput.decoderSurface, nullptr);
+  ASSERT_NE(effectInput.frameSink, nullptr);
+
+  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
+  ASSERT_TRUE(player->isVideoEffectPipelineEnabled());
+  player->setOutputSurface(surface);
+
+  const auto engine = player->getEffectEngine();
+  ASSERT_NE(engine, nullptr);
+
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
+
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] { return probe->ready() || probe->failed(); }, 10s))
+      << "the player never became ready";
+  ASSERT_FALSE(probe->failed()) << probe->error();
+
+  player->play();
+
+  if (!waitFor([&] { return engine->isRunning(); }, 5s)) {
+    player->release();
+    GTEST_SKIP() << "the effect engine could not start on this host: " << engine->diagnostics();
+  }
+  EXPECT_TRUE(waitFor([&] { return probe->videoSizeSeen(); }, 15s))
+      << "the decoder never produced a frame: " << probe->error();
+  EXPECT_TRUE(waitFor([&] { return engine->stats().frameCount > 0; }, 15s))
+      << "the player never presented an effect frame: " << engine->diagnostics();
+
+  // The Apple sink converts the decoder's NV12 surface to BGRA on the GPU and the input node imports
+  // that surface; on Metal the import is in place.
+  if (engine->backend() == EffectBackend::Metal) {
+    EXPECT_TRUE(waitFor([&] { return effectInput.frameSink->isZeroCopy(); }, 10s))
+        << "the Apple input should sample the converted IOSurface in place: "
+        << engine->diagnostics();
+  }
+
+  EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
   player->release();
 }
 

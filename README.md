@@ -185,10 +185,12 @@ decoder, each supplied by the framework below CoralPlayback:
   optional platform graphics context) so the host has one entry point. The default CPU sink
   (`CpuVideoFrameSink`) converts I420/NV12 planes and uploads them through `VideoFrameInputNode`;
   Android adds a pull-model SurfaceTexture sink that only releases the codec buffer while
-  `AndroidSurfaceTextureInputNode` samples the texture on the render thread. Apple's zero-copy
-  node (`AppleVideoInput::createIOSurfaceInput` over `AppleIOSurfaceInputNode`) is ready; its
-  platform sink and NV12/BGRA handling are the next step, which can be added without touching the
-  player core.
+  `AndroidSurfaceTextureInputNode` samples the texture on the render thread. Apple's
+  `AppleVideoInput::createZeroCopyInput` aggregates `AppleHardwareVideoSurface`,
+  `AppleVideoFrameSink` and `AppleIOSurfaceInputNode`: VideoToolbox decodes into an IOSurface, the
+  sink converts the current NV12 surface to one BGRA IOSurface on the GPU (a small ring), and the
+  input node imports it in place. A bi-planar `AppleIOSurfaceInputNode` can later remove that
+  conversion without changing the player core.
 
 The standalone configure enables Objective-C++ before the dependencies are added, which is what the
 Darwin sources of CoralCore, CoralMedia and CoralSubtitle need. CoralGraphics' Metal frame clock uses
@@ -258,14 +260,16 @@ is Cocoa:
 ./build-demo/video_player_demo                              # windowed, plays to the end
 ./build-demo/video_player_demo clip.mp4 --size 1280x720
 ./build-demo/video_player_demo clip.mp4 --frames 120        # stop after 120 presented frames
+./build-demo/video_player_demo clip.mp4 --cpu               # CPU plane fallback
 ./build-demo/video_player_demo clip.mp4 --output frames --frames 30   # headless PNGs
 ./build-demo/video_player_demo clip.mp4 --no-audio          # video only, no output device
 ./build-demo/video_player_demo clip.mp4 --mute              # keep the device, at zero volume
 ```
 
 The windowed demo plays the sound track by default; `--no-audio` builds no audio renderer, so it
-also runs on a machine without an output device. `--output` is headless and leaves the audio off
-unless `--audio` is passed. The window presents the output IOSurface through a layer-backed view and
+also runs on a machine without an output device. It uses the zero-copy Apple sink unless `--cpu`
+asks for the plane upload. `--output` is headless and leaves the audio off unless `--audio` is
+passed. The window presents the output IOSurface through a layer-backed view and
 updates it on every frame the effect graph commits; Esc/Q or closing the window ends it. With
 `--output <dir>` the demo reads the same IOSurface back (after waiting for the GPU) and writes
 `frame_00001.png` per sampled presentation position, without opening a window, so a build machine can

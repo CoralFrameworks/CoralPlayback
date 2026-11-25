@@ -4,9 +4,9 @@ The framework's standalone demo project. `video_player_demo` plays a video throu
 engine and presents the composed frames in a Cocoa window:
 
 ```
-ProgressiveMediaSource -> DecodeVideoRenderer -> VideoFrameInputNode
-    -> VideoLayoutPass -> SubtitleOverlayNode -> AppleIOSurfaceOutputNode
-    -> IOSurface -> layer-backed NSView
+ProgressiveMediaSource -> DecodeVideoRenderer -> AppleVideoFrameSink
+    -> AppleIOSurfaceInputNode -> VideoLayoutPass -> SubtitleOverlayNode
+    -> AppleIOSurfaceOutputNode -> IOSurface -> layer-backed NSView
 ```
 
 The player owns the media source, the decoder and the effect graph. The demo supplies the three
@@ -16,20 +16,19 @@ public pieces a macOS/iOS host supplies:
   target exists and how large it is;
 - a `VideoOutputNodeFactory` (`AppleVideoOutputNodeFactory`) that turns that surface into the graph's
   `AppleIOSurfaceOutputNode`;
-- a `VideoEffectInput` aggregate containing the input node (`AppleVideoInput::createFrameInput`)
-  for the decoded frames. The demo leaves its sink empty, so the player installs the CPU sink.
+- a `VideoEffectInput` aggregate from `AppleVideoInput::createZeroCopyInput`: the hardware decoder
+  surface, the Apple `VideoFrameSink` and the `AppleIOSurfaceInputNode`.
 
-The decoded frame enters through the CPU sink: CoralMedia's VideoToolbox decoder converts its NV12
-`CVPixelBuffer` into I420 planes, `CpuVideoFrameSink` converts them to `VideoFrameDesc`, and
-`VideoFrameInputNode` copies them into its queue and uploads them on the effect render thread. The
-graph composes the frame and `AppleIOSurfaceOutputNode` copies the final image into the output
+Zero-copy is the default. `AppleHardwareVideoSurface` asks VideoToolbox for IOSurface-backed frames;
+`AppleVideoFrameSink` converts the decoder's NV12 surface to a BGRA IOSurface on the GPU (a small
+conversion ring) and publishes it to `AppleIOSurfaceInputNode`, so the pixels never visit the CPU.
+The graph composes the frame and `AppleIOSurfaceOutputNode` copies the final image into the output
 surface on the GPU. The window is a layer-backed `NSView`: its `CALayer.contents` is the surface, so
-presenting a frame costs one property assignment and no pixel copy. A production host can hand the
-same surface to a Metal compositor or a video encoder instead.
+presenting a frame costs one property assignment and no pixel copy.
 
-The zero-copy node (`AppleVideoInput::createIOSurfaceInput` over `AppleIOSurfaceInputNode`) is part of
-the library. Wiring it needs an Apple `VideoFrameSink` and a decoder layout it can import; that work
-stays in the Apple platform layer and does not change `DecodeVideoRenderer`.
+`--cpu` selects the fallback instead: `CpuVideoFrameSink` converts the decoder's NV12 planes to
+`VideoFrameDesc`, and `VideoFrameInputNode` queues and uploads them on the effect render thread. It
+is the reference for a host whose decoder cannot produce a hardware surface.
 
 ## What it verifies
 
@@ -58,6 +57,8 @@ compiled in as `CORAL_ASSETS_DIR`; pass a file to play another one.
 | --- | --- |
 | `--size WxH` | size of the output IOSurface; default is the video's own size |
 | `--frames N` | stop after N presented effect frames; default is to play to the end |
+| `--cpu` | decode to CPU planes and upload them instead of zero-copy |
+| `--zero-copy` | sample the decoder's IOSurface (the default) |
 | `--output DIR` | write PNGs read from the output IOSurface into `DIR` and do not open a window |
 | `--audio` | play the sound track (the default in a window; `--output` needs it explicitly) |
 | `--no-audio` | build no audio renderer, so no output device is needed |

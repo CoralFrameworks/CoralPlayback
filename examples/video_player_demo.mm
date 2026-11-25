@@ -27,11 +27,13 @@
  *     -> VideoLayoutPass -> SubtitleOverlayNode -> AppleIOSurfaceOutputNode -> IOSurface -> CALayer
  * ```
  *
- * The decoded frame reaches the graph through the CPU fallback: `DecodeVideoRenderer` converts the
- * decoder's NV12 buffer into I420 planes, `VideoFrameInputNode` copies them into its queue and uploads
- * them to the GPU on the render thread. The graph composes the frame, and `AppleVideoOutputNodeFactory`
- * turns the application's `AppleIOSurface` into an `AppleIOSurfaceOutputNode`, which copies the final
- * image into that surface on the GPU with no CPU round trip.
+ * Zero-copy is the default. `AppleHardwareVideoSurface` asks VideoToolbox for IOSurface-backed
+ * frames; `AppleVideoFrameSink` converts the decoder's NV12 surface to one BGRA IOSurface on the GPU
+ * and publishes it to `AppleIOSurfaceInputNode`, so the pixels never visit the CPU. `--cpu` selects
+ * the fallback instead: `DecodeVideoRenderer` hands the frame to the player's CPU sink, which
+ * converts the planes and uploads them through `VideoFrameInputNode`. In both cases the graph
+ * composes the frame and `AppleVideoOutputNodeFactory` turns the application's `AppleIOSurface` into
+ * an `AppleIOSurfaceOutputNode`, which copies the final image into that surface on the GPU.
  *
  * The window is a layer-backed `NSView` whose `CALayer.contents` is the surface. Re-assigning the
  * surface on every new effect frame is what makes Core Animation re-composite it; the pixels never
@@ -50,6 +52,7 @@
  * ./video_player_demo                                # assets/video/video720p_5s.mp4, windowed
  * ./video_player_demo clip.mp4 --size 1280x720
  * ./video_player_demo clip.mp4 --frames 120          # stop after 120 presented effect frames
+ * ./video_player_demo clip.mp4 --cpu                 # CPU fallback instead of zero-copy
  * ./video_player_demo clip.mp4 --output frames --frames 30   # headless: write PNGs from the surface
  * ```
  *
@@ -114,6 +117,7 @@ struct Options {
   bool audioSpecified = false;
   bool mute = false;
   bool showWindow = true;
+  bool zeroCopy = true;
 };
 
 void printUsage(const char* program) {
@@ -127,6 +131,8 @@ void printUsage(const char* program) {
       "  --audio               play the audio track (the default in a window)\n"
       "  --no-audio            do not build the audio renderer\n"
       "  --mute                set the audio volume to zero\n"
+      "  --cpu                 decode through CPU planes and upload them (default: zero-copy)\n"
+      "  --zero-copy           sample the decoder's IOSurface (the default)\n"
       "  --help                this text\n",
       program);
 }
@@ -154,6 +160,14 @@ std::optional<Options> parseOptions(const int argc, char** argv) {
     }
     if (argument == "--mute") {
       options.mute = true;
+      continue;
+    }
+    if (argument == "--cpu") {
+      options.zeroCopy = false;
+      continue;
+    }
+    if (argument == "--zero-copy") {
+      options.zeroCopy = true;
       continue;
     }
     if (argument == "--size") {
@@ -402,13 +416,19 @@ public:
     // planes and the node uploads them to the GPU. The output factory turns the IOSurface into the
     // graph's `AppleIOSurfaceOutputNode`.
     coral::VideoEffectInput effectInput;
-    effectInput.inputNode = coral::AppleVideoInput::createFrameInput(renderWidth, renderHeight, 8);
-    if (effectInput.inputNode == nullptr) {
-      std::fprintf(stderr, "error: could not create the effect input node\n");
+    if (options.zeroCopy) {
+      effectInput = coral::AppleVideoInput::createZeroCopyInput(renderWidth, renderHeight, 8);
+      std::printf("video input: zero-copy AppleIOSurfaceInputNode + AppleVideoFrameSink\n");
+    } else {
+      effectInput.inputNode = coral::AppleVideoInput::createFrameInput(renderWidth, renderHeight, 8);
+      std::printf("video input: CPU fallback VideoFrameInputNode\n");
+    }
+    if (effectInput.inputNode == nullptr ||
+        (options.zeroCopy &&
+         (effectInput.frameSink == nullptr || effectInput.decoderSurface == nullptr))) {
+      std::fprintf(stderr, "error: could not create the effect input\n");
       return nullptr;
     }
-    // No frameSink is set: the player installs the CPU sink because the input is a
-    // VideoFrameInputNode. A platform sink is what a hardware zero-copy path adds later.
     player->enableVideoEffectPipeline(
         std::make_shared<coral::AppleVideoOutputNodeFactory>(), effectInput);
     if (!player->isVideoEffectPipelineEnabled()) {

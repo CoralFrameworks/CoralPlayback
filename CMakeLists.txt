@@ -387,6 +387,7 @@ endif ()
 
 if (APPLE)
   list(APPEND PUBLIC_HDRS
+      coral/playback/apple/AppleHardwareVideoSurface.h
       coral/playback/apple/AppleIOSurface.h
       coral/playback/apple/AppleVideoInput.h
       coral/playback/apple/AppleVideoOutputNodeFactory.h
@@ -502,7 +503,10 @@ endif ()
 
 if (APPLE)
   list(APPEND SRCS
+      src/platform/apple/AppleHardwareVideoSurface.mm
       src/platform/apple/AppleIOSurface.mm
+      src/platform/apple/AppleVideoFrameSink.h
+      src/platform/apple/AppleVideoFrameSink.mm
       src/platform/apple/AppleVideoInput.mm
       src/platform/apple/AppleVideoOutputNodeFactory.mm
   )
@@ -548,7 +552,8 @@ elseif (APPLE)
   target_link_libraries(${CORAL_PLAYBACK_TARGET} PRIVATE
       "-framework CoreFoundation"
       "-framework CoreVideo"
-      "-framework IOSurface")
+      "-framework IOSurface"
+      "-framework VideoToolbox")
 endif ()
 
 # ==================================================================================================
