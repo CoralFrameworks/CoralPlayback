@@ -49,6 +49,7 @@ add_executable(${TARGET}
     test_ChapterThumbnailProvider.cpp
     test_DefaultLoadControl.cpp
     test_DefaultProgressiveMediaExtractor.cpp
+    test_DiskThumbnailProvider.cpp
     test_MediaSourceList.cpp
     test_MergePlayer.cpp
     test_MergingMediaSource.cpp

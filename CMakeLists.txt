@@ -295,6 +295,7 @@ set(PUBLIC_HDRS
     coral/playback/ChapterThumbnailProvider.h
     coral/playback/Chapters.h
     coral/playback/DefaultMediaClock.h
+    coral/playback/DiskThumbnailProvider.h
     coral/playback/LivePlayer.h
     coral/playback/LoadControl.h
     coral/playback/MediaClock.h
@@ -428,6 +429,7 @@ set(SRCS
     src/details/MetadataRenderer.cpp
     src/details/MetadataRenderer.h
     src/details/DefaultLoadControl.cpp
+    src/details/DiskThumbnailProvider.cpp
     src/details/DefaultLoadControl.h
     src/details/SubtitleOverlayNode.cpp
     src/details/SubtitleOverlayNode.h
