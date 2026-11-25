@@ -972,6 +972,46 @@ TEST(AppleLivePlayerEffectTest, SelectsThePreferredSubtitleLanguage) {
   player->release();
 }
 
+TEST(AppleLivePlayerEffectTest, SelectsAPreferredSubtitleRole) {
+  const std::string video = std::string(CORAL_ASSETS_DIR) + "/video/video720p_5s.mp4";
+  const std::string english = std::string(CORAL_ASSETS_DIR) + "/subtitle/sample.srt";
+  const std::string chinese = std::string(CORAL_ASSETS_DIR) + "/subtitle/sample_zho.srt";
+  if (!std::filesystem::exists(english) || !std::filesystem::exists(chinese)) {
+    GTEST_SKIP() << "the subtitle fixtures are missing";
+  }
+  std::vector<MediaItem::SubtitleConfiguration> subtitles;
+  subtitles.emplace_back(english, "application/x-subrip", "en", "English", "en-srt",
+                         coral::RoleFlags::kRoleFlagCaption, 0);
+  subtitles.emplace_back(chinese, "application/x-subrip", "zh", "Chinese", "zh-srt");
+  auto player = LivePlayer::create(MediaItem::fromUrl(video, std::move(subtitles)),
+                                   LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  player->setPreferredTextRoleFlags(coral::RoleFlags::kRoleFlagCaption);
+  player->setSelectUndeterminedTextLanguage(false);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] {
+    return player->getPlaybackState() == coral::Player::State::STATE_READY ||
+           !player->getPlaybackErrorMessage().empty();
+  }, 10s)) << player->getPlaybackErrorMessage();
+  ASSERT_TRUE(player->getPlaybackErrorMessage().empty());
+
+  const auto captionIsSelected = [&] {
+    for (const auto& group : player->getCurrentTracks().groups) {
+      for (const auto& track : group.tracks) {
+        if (track.type == coral::TrackType::Text && track.selected && track.format != nullptr &&
+            (track.format->getRoleFlags() &
+             static_cast<uint32_t>(coral::RoleFlags::kRoleFlagCaption)) != 0) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  EXPECT_TRUE(waitFor(captionIsSelected, 5s))
+      << "the caption-role subtitle was not selected within the reselection window";
+  player->release();
+}
+
 // ==================================================================================================
 // The player drives the IOSurface output
 // ==================================================================================================

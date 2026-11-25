@@ -82,6 +82,13 @@ void MergingMediaPeriod::onChildPrepared() {
         if (!metadata[index].mimeType.empty()) updated->setMimeType(metadata[index].mimeType);
         if (!metadata[index].language.empty()) updated->setLanguage(metadata[index].language);
         if (!metadata[index].label.empty()) updated->setLabel(metadata[index].label);
+        if (metadata[index].roleFlags != 0) {
+          updated->setRoleFlags(metadata[index].roleFlags);
+        }
+        if (metadata[index].selectionFlags != 0) {
+          updated->setSelectionFlags(static_cast<MediaSelectionFlags>(
+            metadata[index].selectionFlags));
+        }
         if (!metadata[index].id.empty()) {
           // Do not use std::stoi here: the Android build disables C++ exceptions, so a non-numeric
           // id such as "styled-ass" would abort the process instead of throwing a catchable error.

@@ -17,6 +17,7 @@
 #define CORAL_PLAYBACK_SOURCE_MEDIA_ITEM_H
 
 #include <media/Definitions.h>
+#include <media/Types.h>
 
 #include <cmath>
 #include <memory>
@@ -57,16 +58,26 @@ public:
      */
     const std::string id;
 
+    /** Role flags such as caption/forced/commentary for this side-loaded track. */
+    const uint32_t roleFlags;
+
+    /** Selection flags such as default/forced for this side-loaded track. */
+    const uint32_t selectionFlags;
+
     explicit SubtitleConfiguration(std::string url,
         std::string mimeType,
         std::string language,
         std::string label,
-        std::string id) noexcept
+        std::string id,
+        const uint32_t roleFlags = 0,
+        const uint32_t selectionFlags = 0) noexcept
         : url(std::move(url)),
           mimeType(std::move(mimeType)),
           language(std::move(language)),
           label(std::move(label)),
-          id(std::move(id)) {}
+          id(std::move(id)),
+          roleFlags(roleFlags),
+          selectionFlags(selectionFlags) {}
 
     SubtitleConfiguration(const SubtitleConfiguration& other) = delete;
     SubtitleConfiguration& operator=(const SubtitleConfiguration& other) = delete;
