@@ -17,7 +17,7 @@
 #ifndef CORAL_PLAYBACK_THUMBNAIL_H
 #define CORAL_PLAYBACK_THUMBNAIL_H
 
-#include <media/PixelBuffer.h>
+#include <media/PixelBufferHandle.h>
 
 #include <cstdint>
 #include <functional>
@@ -30,8 +30,13 @@ struct Thumbnail {
   /** The media position the thumbnail was decoded at, in microseconds. */
   int64_t positionUs = 0;
 
-  /** The decoded frame, or null when the provider could not produce one. */
-  std::shared_ptr<AVPixelBuffer> frame;
+  /**
+   * The decoded frame, or null when the provider could not produce one.
+   *
+   * <p>The handle is platform-neutral: a macOS provider exposes the IOSurface, a Windows provider a
+   * D3D11 texture, and a CPU provider locked planes.
+   */
+  std::shared_ptr<PixelBuffer> frame;
 };
 
 /**

@@ -26,6 +26,7 @@
 #include <coral/playback/VideoOutput.h>
 #include <coral/playback/apple/AppleHardwareVideoSurface.h>
 #include <coral/playback/apple/AppleIOSurface.h>
+#include <coral/playback/apple/AppleThumbnailProvider.h>
 #include <coral/playback/apple/AppleVideoInput.h>
 #include <coral/playback/apple/AppleVideoFrameSource.h>
 #include <coral/playback/apple/AppleVideoOutputNodeFactory.h>
@@ -56,6 +57,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <future>
 
 namespace coral {
 namespace {
@@ -908,6 +910,26 @@ TEST(AppleLivePlayerEffectTest, PlaysHdr10AndReportsItsColorInfo) {
                         << static_cast<int>(pixel[0]) << "," << static_cast<int>(pixel[1]) << ","
                         << static_cast<int>(pixel[2]) << "," << static_cast<int>(pixel[3]);
   player->release();
+}
+
+TEST(AppleThumbnailProviderTest, DecodesAFrameAtTheRequestedTime) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/video720p_5s.mp4";
+  auto provider = AppleThumbnailProvider::create(path, 320, 180);
+  ASSERT_NE(provider, nullptr);
+  auto promise = std::make_shared<std::promise<Thumbnail>>();
+  auto future = promise->get_future();
+  provider->requestThumbnail(1'000'000, [promise](Thumbnail thumbnail) {
+    promise->set_value(std::move(thumbnail));
+  });
+  ASSERT_EQ(future.wait_for(10s), std::future_status::ready);
+  const auto thumbnail = future.get();
+  ASSERT_NE(thumbnail.frame, nullptr);
+  EXPECT_EQ(thumbnail.positionUs, 1'000'000);
+  EXPECT_GT(thumbnail.frame->width(), 0);
+  EXPECT_GT(thumbnail.frame->height(), 0);
+  EXPECT_LE(thumbnail.frame->width(), 320);
+  EXPECT_LE(thumbnail.frame->height(), 180);
+  provider->cancel();
 }
 
 // ==================================================================================================

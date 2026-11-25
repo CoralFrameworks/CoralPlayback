@@ -404,6 +404,7 @@ if (APPLE)
       coral/playback/apple/AppleIOSurface.h
       coral/playback/apple/AppleVideoFrameSource.h
       coral/playback/apple/AppleVideoInput.h
+      coral/playback/apple/AppleThumbnailProvider.h
       coral/playback/apple/AppleVideoOutputNodeFactory.h
   )
 endif ()
@@ -524,6 +525,7 @@ if (APPLE)
       src/platform/apple/AppleHardwareVideoSurface.mm
       src/platform/apple/AppleIOSurface.mm
       src/platform/apple/AppleVideoFrameSink.h
+      src/platform/apple/AppleThumbnailProvider.mm
       src/platform/apple/AppleVideoFrameSink.mm
       src/platform/apple/AppleVideoFrameSource.mm
     src/platform/apple/AppleVideoInput.mm
@@ -569,7 +571,9 @@ elseif (APPLE)
   # `AppleIOSurfaceInputNode`; both live in CoralGraphics' `effect_apple` target.
   target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC effect_apple)
   target_link_libraries(${CORAL_PLAYBACK_TARGET} PRIVATE
+      "-framework AVFoundation"
       "-framework CoreFoundation"
+      "-framework CoreGraphics"
       "-framework CoreVideo"
       "-framework IOSurface"
       "-framework VideoToolbox")
