@@ -1721,21 +1721,26 @@ void AvLivePlayer::selectTrackInternal(const TrackSelectionRequest& request) {
   if (group == nullptr || request.trackIndex < 0 || request.trackIndex >= group->length()) {
     return;
   }
-  // An explicit audio selection also chooses which audio renderer is active. The other audio
-  // renderers remain prepared but disabled, so they never produce a second simultaneous output.
-  if (request.rendererIndex >= 0 && request.rendererIndex < static_cast<int>(renderers.size()) &&
-      renderers[request.rendererIndex] != nullptr &&
-      renderers[request.rendererIndex]->getMediaType() == MediaType::kMediaTypeAudio) {
+  // An explicit audio selection also chooses which audio renderer is active. Install the override
+  // and enable the target before disabling its siblings: a disable-first order leaves a window in
+  // which no audio renderer is enabled, which is audible as a gap. The target is selected when it
+  // becomes enabled, and the old renderer is disabled immediately after it.
+  const bool audioTarget =
+    request.rendererIndex >= 0 && request.rendererIndex < static_cast<int>(renderers.size()) &&
+    renderers[request.rendererIndex] != nullptr &&
+    renderers[request.rendererIndex]->getMediaType() == MediaType::kMediaTypeAudio;
+  selector->setSelectionOverride(request.rendererIndex,
+    SelectionOverride(request.groupIndex, request.trackIndex));
+  if (audioTarget) {
+    selector->setRendererDisabled(request.rendererIndex, false);
     for (size_t index = 0; index < renderers.size(); ++index) {
       if (renderers[index] != nullptr &&
-          renderers[index]->getMediaType() == MediaType::kMediaTypeAudio) {
-        selector->setRendererDisabled(static_cast<int>(index),
-          static_cast<int>(index) != request.rendererIndex);
+          renderers[index]->getMediaType() == MediaType::kMediaTypeAudio &&
+          static_cast<int>(index) != request.rendererIndex) {
+        selector->setRendererDisabled(static_cast<int>(index), true);
       }
     }
   }
-  selector->setSelectionOverride(request.rendererIndex,
-    SelectionOverride(request.groupIndex, request.trackIndex));
 }
 
 void AvLivePlayer::clearTrackSelectionInternal(const int rendererIndex) {
