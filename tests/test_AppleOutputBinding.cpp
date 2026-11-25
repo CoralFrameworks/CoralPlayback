@@ -97,6 +97,14 @@ public:
     mVideoColorSeen.store(true, std::memory_order_release);
   }
 
+  void onCues(const AVCueGroup& cues) override {
+    for (const auto& cue : cues.getCues()) {
+      if (cue.isBitmap()) {
+        mBitmapCueSeen.store(true, std::memory_order_release);
+      }
+    }
+  }
+
   void onTracksChanged(const coral::Tracks& tracks) override {
     static_cast<void>(tracks);
     mTracksSeen.store(true, std::memory_order_release);
@@ -122,6 +130,9 @@ public:
   [[nodiscard]] bool videoColorSeen() const {
     return mVideoColorSeen.load(std::memory_order_acquire);
   }
+  [[nodiscard]] bool bitmapCueSeen() const {
+    return mBitmapCueSeen.load(std::memory_order_acquire);
+  }
   [[nodiscard]] bool failed() const { return mFailed.load(std::memory_order_acquire); }
   [[nodiscard]] std::string error() const {
     std::lock_guard<std::mutex> lock(mMutex);
@@ -134,6 +145,7 @@ private:
   std::atomic<bool> mTracksSeen{false};
   std::atomic<int> mTracksChangedCount{0};
   std::atomic<bool> mVideoColorSeen{false};
+  std::atomic<bool> mBitmapCueSeen{false};
   std::atomic<bool> mFailed{false};
   mutable std::mutex mMutex;
   std::string mError;
@@ -865,6 +877,93 @@ TEST(AppleLivePlayerEffectTest, ReportsAndSelectsSideLoadedSubtitleTracks) {
     return false;
   }, 5s)) << "the selected subtitle track is not the target";
   EXPECT_GT(probe->tracksChangedCount(), changesBefore);
+  player->release();
+}
+
+TEST(AppleLivePlayerEffectTest, CompositesAPgsCueIntoTheOutputSurface) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/pgs_subtitle_5s.mkv";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the PGS fixture is missing: " << path;
+  }
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  const auto surface = AppleIOSurface::create(320, 180, EffectPixelFormat::BGRA8);
+  ASSERT_NE(surface, nullptr);
+  const auto input = AppleVideoInput::createFrameInput(320, 180, 4);
+  ASSERT_NE(input, nullptr);
+  VideoEffectInput effectInput;
+  effectInput.inputNode = input;
+  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
+  player->setOutputSurface(surface);
+  player->setPreferredTextLanguage("eng");
+  const auto engine = player->getEffectEngine();
+  ASSERT_NE(engine, nullptr);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] { return player->getPlaybackState() == coral::Player::State::STATE_READY; },
+                      10s)) << player->getPlaybackErrorMessage();
+  player->play();
+  ASSERT_TRUE(waitFor([&] { return engine->isRunning() && engine->stats().frameCount > 0; }, 15s))
+      << engine->diagnostics();
+
+  // The fixture's PGS palette is (254, 0, 0); the cue is full-frame, so the composed center pixel
+  // must carry that red rather than the underlying video.
+  bool red = false;
+  std::vector<uint8_t> pixel;
+  for (int attempt = 0; attempt < 100 && !red; ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    pixel = centrePixel(surface->iosurface());
+    red = pixel[2] >= 200 && pixel[1] <= 130;
+    if (!red) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(red) << "PGS bitmap was not composited; BGRA="
+                   << static_cast<int>(pixel[0]) << "," << static_cast<int>(pixel[1]) << ","
+                   << static_cast<int>(pixel[2]) << "," << static_cast<int>(pixel[3]);
+  player->release();
+}
+
+TEST(AppleLivePlayerEffectTest, CompositesAVobSubCueIntoTheOutputSurface) {
+  const std::string path = std::string(CORAL_ASSETS_DIR) + "/video/vobsub_subtitle_5s.mkv";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the VobSub fixture is missing: " << path;
+  }
+  auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(player, nullptr);
+  const auto surface = AppleIOSurface::create(320, 180, EffectPixelFormat::BGRA8);
+  ASSERT_NE(surface, nullptr);
+  const auto input = AppleVideoInput::createFrameInput(320, 180, 4);
+  ASSERT_NE(input, nullptr);
+  VideoEffectInput effectInput;
+  effectInput.inputNode = input;
+  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
+  player->setOutputSurface(surface);
+  player->setPreferredTextLanguage("eng");
+  const auto engine = player->getEffectEngine();
+  ASSERT_NE(engine, nullptr);
+  const auto probe = std::make_shared<PlayerProbe>();
+  player->addListener(probe);
+  player->prepare();
+  ASSERT_TRUE(waitFor([&] { return player->getPlaybackState() == coral::Player::State::STATE_READY; },
+                      10s)) << player->getPlaybackErrorMessage();
+  player->play();
+  ASSERT_TRUE(waitFor([&] { return engine->isRunning() && engine->stats().frameCount > 0; }, 15s))
+      << engine->diagnostics();
+  ASSERT_TRUE(waitFor([&] { return probe->bitmapCueSeen(); }, 10s))
+      << "the VobSub cue never reached the player events";
+  bool red = false;
+  std::vector<uint8_t> pixel;
+  for (int attempt = 0; attempt < 100 && !red; ++attempt) {
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    pixel = centrePixel(surface->iosurface());
+    red = pixel[2] >= 200 && pixel[1] <= 130;
+    if (!red) {
+      std::this_thread::sleep_for(10ms);
+    }
+  }
+  EXPECT_TRUE(red) << "VobSub bitmap was not composited; BGRA="
+                   << static_cast<int>(pixel[0]) << "," << static_cast<int>(pixel[1]) << ","
+                   << static_cast<int>(pixel[2]) << "," << static_cast<int>(pixel[3]);
   player->release();
 }
 
