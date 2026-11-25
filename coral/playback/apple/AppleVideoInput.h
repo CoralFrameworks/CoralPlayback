@@ -37,19 +37,20 @@ namespace coral {
  * in place by `AppleIOSurfaceInputNode` and no pixel ever reaches the CPU.
  *
  * <p>This is the Apple counterpart of `AndroidVideoInput`: the player itself does not create the
- * platform input, the application does and passes it to `enableVideoEffectPipeline`.
+ * platform input, the application does and passes it to `enableVideoEffectPipeline` inside a
+ * `VideoEffectInput` together with the sink that feeds it.
  *
  * ## Current wiring
  *
- * The player's `DecodeVideoRenderer` still converts every decoded frame to CPU planes
- * (`VideoFrameConverter`) and submits it to the graph. Passing `createFrameInput` is therefore what a
- * macOS/iOS host should do today; it is exactly the node the player would create on its own, but an
- * application that already knows the video size can create it up front and keep a reference.
+ * Every decoded frame currently reaches the graph through the CPU path: CoralMedia's Darwin decoder
+ * converts its NV12 `CVPixelBuffer` into planes, the player's `CpuVideoFrameSink` converts them to
+ * `VideoFrameDesc`, and `VideoFrameInputNode` uploads them. `createFrameInput` returns the node for
+ * that path; the player installs the CPU sink when the aggregate omits one.
  *
- * `createIOSurfaceInput` creates the zero-copy node. It works for a single-plane BGRA/RGBA surface
- * (the decoder has to emit one, and the renderer has to submit the surface-backed frame instead of
- * planes); the player's surface-backed submit path is the next milestone, so passing this node today
- * would leave it without frames.
+ * `createIOSurfaceInput` creates the zero-copy node for a single-plane BGRA/RGBA surface. It needs a
+ * platform `VideoFrameSink` to publish the decoder's `CVPixelBuffer` surface, and the decoder has to
+ * emit that layout; the Apple sink and NV12/BGRA handling are the next milestone. Passing only the
+ * node today would leave it without frames.
  */
 class AppleVideoInput {
 public:

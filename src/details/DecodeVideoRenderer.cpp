@@ -18,6 +18,8 @@
 #include "TraceUtil.h"
 #include "VideoEffectGraph.h"
 
+#include <coral/playback/VideoFrameSink.h>
+
 #include <core/time/SystemClock.h>
 
 #include <codec/MediaCodecFactory.h>
@@ -72,31 +74,39 @@ DecodeVideoRenderer::~DecodeVideoRenderer() {
 void DecodeVideoRenderer::setVideoEffectGraph(std::shared_ptr<VideoEffectGraph> graph) {
   mVideoEffectGraph = std::move(graph);
   if (mVideoEffectGraph != nullptr) {
-    // The CPU graph owns presentation; the decoder must output YUV frames unless a zero-copy
-    // surface is installed afterwards with setEffectInputSurface.
-    if (!mZeroCopyEffectInput && mSurface != nullptr) {
+    // Presentation belongs to the graph's output node. A legacy window surface must not stay
+    // configured on the decoder; the effect sink provides its own decoder surface through
+    // setVideoFrameSink().
+    if (mSurface != nullptr) {
       mSurface->release();
       mSurface.reset();
     }
-    if (!mZeroCopyEffectInput) {
-      mRenderType = RenderType::RENDER_TYPE_NONE;
+    mRenderType = RenderType::RENDER_TYPE_NONE;
+  } else {
+    if (mFrameSink != nullptr) {
+      mFrameSink->flush();
     }
+    mFrameSink.reset();
+    mEffectDecoderSurface.reset();
   }
 }
 
-void DecodeVideoRenderer::setEffectInputSurface(const std::shared_ptr<VideoSurface>& surface) {
-  if (mVideoEffectGraph == nullptr || surface == nullptr) {
-    return;
+void DecodeVideoRenderer::setVideoFrameSink(std::shared_ptr<VideoFrameSink> sink,
+                                            std::shared_ptr<VideoSurface> decoderSurface) {
+  mFrameSink = std::move(sink);
+  mEffectDecoderSurface = std::move(decoderSurface);
+  if (mFrameSink != nullptr) {
+    mFrameSink->setInputFormat(mInputFormat);
   }
-  if (mSurface != surface) {
-    mSurface = surface;
+  if (mVideoEffectGraph != nullptr) {
+    // A sink installed after the decoder already exists has to reconfigure it with the new surface,
+    // or the decoder would keep writing into the previous one.
+    if (mVideoDecoder != nullptr) {
+      releaseDecoder();
+      maybeInitDecoder();
+    }
+    onOutputChanged();
   }
-  mZeroCopyEffectInput = true;
-  mRenderType = RenderType::RENDER_FORMAT_SURFACE;
-  if (mVideoDecoder != nullptr) {
-    setVideoRenderMode(mRenderType);
-  }
-  onOutputChanged();
 }
 
 void DecodeVideoRenderer::render(int64_t positionUs, int64_t elapsedRealtimeUs) {
@@ -245,6 +255,9 @@ void DecodeVideoRenderer::onDecoderInitialized(const std::string& name,
 
 void DecodeVideoRenderer::flushDecoder() {
   mBuffersInCodecCount = 0;
+  if (mFrameSink != nullptr) {
+    mFrameSink->flush();
+  }
   if (mDecoderReinitializationState != kReinitializationStateNone) {
     releaseDecoder();
     maybeInitDecoder();
@@ -257,6 +270,9 @@ void DecodeVideoRenderer::flushDecoder() {
 }
 
 void DecodeVideoRenderer::releaseDecoder() {
+  if (mFrameSink != nullptr) {
+    mFrameSink->flush();
+  }
   mInputBuffer.reset();
   mOutputBuffer.reset();
   mDecoderReinitializationState = kReinitializationStateNone;
@@ -279,6 +295,9 @@ void DecodeVideoRenderer::onInputFormatChanged(FormatHolder& formatHolder) {
   mWaitingForFirstSampleInFormat = true;
   auto oldFormat = std::move(mInputFormat);
   mInputFormat = formatHolder.format;
+  if (mFrameSink != nullptr) {
+    mFrameSink->setInputFormat(mInputFormat);
+  }
   if (mVideoDecoder == nullptr) {
     maybeInitDecoder();
   } else if (!canKeepCodec(oldFormat, mInputFormat)) {
@@ -368,8 +387,10 @@ void DecodeVideoRenderer::skipOutputBuffer(std::shared_ptr<AVPixelBuffer> frameB
 
 void DecodeVideoRenderer::discardOutputBuffer(std::shared_ptr<AVPixelBuffer> frameBuffer) {
   if (mVideoEffectGraph != nullptr) {
-    // The graph copies the frame during submit; hand the decoder's buffer back immediately.
-    if (mVideoDecoder != nullptr) {
+    // The sink owns the frame and its platform release path; the renderer must not release it twice.
+    if (mFrameSink != nullptr) {
+      mFrameSink->discard(std::move(frameBuffer));
+    } else if (mVideoDecoder != nullptr) {
       mVideoDecoder->releaseOutputBuffer(std::move(frameBuffer), false);
     } else if (frameBuffer != nullptr) {
       frameBuffer->release();
@@ -445,38 +466,7 @@ void DecodeVideoRenderer::renderOutputBuffer(std::shared_ptr<AVPixelBuffer> fram
       updateDroppedBufferCounters(1);
       return;
     }
-    if (frameBuffer->getFormat() == PixelFormat::kFormatSurface) {
-      if (mZeroCopyEffectInput) {
-        // The input node samples the SurfaceTexture the decoder rendered into; there is no CPU
-        // frame to submit. The decoder already released a sampled buffer in that mode.
-        mConsecutiveDroppedFrameCount = 0;
-        decoderCounters.renderedOutputBufferCount++;
-        mLastRenderedTimeUs = presentationTimeUs + mOutputStreamOffsetUs;
-        mVideoEffectGraph->setPositionUs(presentationTimeUs + mOutputStreamOffsetUs);
-        maybeNotifyRenderedFirstFrame();
-        if (mVideoDecoder != nullptr) {
-          mVideoDecoder->releaseOutputBuffer(std::move(frameBuffer), false);
-        } else {
-          frameBuffer->release();
-        }
-        return;
-      }
-      // The graph decodes into YUV; a surface buffer here means a legacy surface was still
-      // configured. Drop it rather than handing the graph a buffer it cannot sample.
-      updateDroppedBufferCounters(1);
-      frameBuffer->addFlag(AVBufferFlags::kDiscard);
-      if (mVideoDecoder != nullptr) {
-        mVideoDecoder->releaseOutputBuffer(std::move(frameBuffer), false);
-      } else {
-        frameBuffer->release();
-      }
-      return;
-    }
-
-    VideoFrameDesc desc;
-    const int displayWidth = mInputFormat != nullptr ? mInputFormat->getWidth() : 0;
-    const int displayHeight = mInputFormat != nullptr ? mInputFormat->getHeight() : 0;
-    if (!mFrameConverter.convert(frameBuffer, &desc, displayWidth, displayHeight)) {
+    if (mFrameSink == nullptr) {
       updateDroppedBufferCounters(1);
       if (mVideoDecoder != nullptr) {
         mVideoDecoder->releaseOutputBuffer(std::move(frameBuffer), false);
@@ -486,25 +476,25 @@ void DecodeVideoRenderer::renderOutputBuffer(std::shared_ptr<AVPixelBuffer> fram
       return;
     }
 
-    const EffectResult result = mVideoEffectGraph->submit(desc);
-    if (result != EffectResult::Success) {
-      MINILOG_WARN("the effect input rejected a frame: {}", toString(result));
+    const int width = frameBuffer->width();
+    const int height = frameBuffer->height();
+    const int64_t mediaPositionUs = presentationTimeUs + mOutputStreamOffsetUs;
+    // The sink owns the frame from here: it releases it, or keeps it alive until the platform input
+    // has sampled it. The renderer never releases it a second time.
+    const bool submitted = mFrameSink->submit(std::move(frameBuffer), mediaPositionUs);
+    if (!submitted) {
       updateDroppedBufferCounters(1);
     } else {
       mConsecutiveDroppedFrameCount = 0;
       decoderCounters.renderedOutputBufferCount++;
-      mLastRenderedTimeUs = presentationTimeUs + mOutputStreamOffsetUs;
-      mVideoEffectGraph->setPositionUs(desc.timestamp.value);
+      mLastRenderedTimeUs = mediaPositionUs;
+      mVideoEffectGraph->setPositionUs(mediaPositionUs);
       maybeNotifyRenderedFirstFrame();
     }
-
-    // `submit` copies the planes; the decoder's buffer can go back immediately.
-    if (mVideoDecoder != nullptr) {
-      mVideoDecoder->releaseOutputBuffer(std::move(frameBuffer), false);
-    } else {
-      frameBuffer->release();
+    // A surface ticket may not carry a size; the decoder's format reports it separately.
+    if (width > 0 && height > 0) {
+      maybeNotifyVideoSizeChanged(width, height);
     }
-    maybeNotifyVideoSizeChanged(static_cast<int>(desc.width), static_cast<int>(desc.height));
     return;
   }
 
@@ -537,16 +527,8 @@ void DecodeVideoRenderer::renderOutputBuffer(std::shared_ptr<AVPixelBuffer> fram
 
 void DecodeVideoRenderer::setOutputSurface(const std::shared_ptr<VideoSurface>& surface) {
   if (mVideoEffectGraph != nullptr) {
-    // Presentation belongs to the graph's output node. In zero-copy mode mSurface is the decoder
-    // input SurfaceTexture, not a presentation surface, so an output rebind must not release it.
-    if (!mZeroCopyEffectInput && mSurface != nullptr) {
-      mSurface->release();
-      mSurface.reset();
-    }
-    if (mZeroCopyEffectInput) {
-      return;
-    }
-    mRenderType = RenderType::RENDER_TYPE_NONE;
+    // Presentation belongs to the graph's output node; the decoder surface comes from the effect
+    // input, so an output rebind must not touch it.
     return;
   }
   if (mSurface != surface) {
@@ -578,8 +560,13 @@ DecodeVideoRenderer::createDecoder(const std::shared_ptr<MediaFormat>& inputForm
     return nullptr;
   }
 
-  // If we rendering to a surface, we should wait for the surface prepared before creating decoder.
-  if ((mSurface != nullptr && !mSurface->isValid())) {
+  // In effect mode the sink owns the decoder surface; otherwise the legacy surface is used.
+  const std::shared_ptr<VideoSurface> decoderSurface =
+    mVideoEffectGraph != nullptr ? mEffectDecoderSurface : mSurface;
+
+  // If we render to a surface, we should wait for the surface to be prepared before creating the
+  // decoder.
+  if (decoderSurface != nullptr && !decoderSurface->isValid()) {
     MINILOG_DEBUG("Waiting for the Surface prepared....");
     return nullptr;
   }
@@ -588,7 +575,7 @@ DecodeVideoRenderer::createDecoder(const std::shared_ptr<MediaFormat>& inputForm
   auto manufacturer = CodecUtils::getVideoCodecManufacturer(inputFormat->getMimeType(), false);
   auto decoder = CreateBuiltinVideoCodecFactory()->createVideoDecoder(videoCodecType, manufacturer);
   if (decoder != nullptr) {
-    decoder->configure(inputFormat, mSurface);
+    decoder->configure(inputFormat, decoderSurface);
     decoder->start();
   }
 
@@ -717,11 +704,11 @@ bool DecodeVideoRenderer::processOutputBuffer(int64_t positionUs, int64_t elapse
     initialPositionUs = positionUs;
   }
 
-  // A zero-copy surface frame is already in the SurfaceTexture queue. Holding it for the renderer
-  // clock starves the decoder (and the SurfaceTexture) at position 0; hand it back immediately and
-  // let the GPU consumer take the next one.
-  if (mVideoEffectGraph != nullptr && mZeroCopyEffectInput && mOutputBuffer != nullptr &&
-      mOutputBuffer->getFormat() == PixelFormat::kFormatSurface) {
+  // A pull-model sink (Android SurfaceTexture) has already put the frame in front of its consumer.
+  // Holding the decoder buffer for the renderer clock starves the producer, so it is handed over
+  // immediately and the sink decides what to release.
+  if (mVideoEffectGraph != nullptr && mFrameSink != nullptr && mFrameSink->isPullModel() &&
+      mOutputBuffer != nullptr) {
     const int64_t presentationTimeUs = mOutputBuffer->timeUs() - mOutputStreamOffsetUs;
     renderOutputBuffer(std::move(mOutputBuffer), presentationTimeUs, mOutputFormat);
     mOutputBuffer = nullptr;

@@ -305,6 +305,7 @@ set(PUBLIC_HDRS
     coral/playback/StandaloneClock.h
     coral/playback/TextOutput.h
     coral/playback/TimedFormatQueue.h
+    coral/playback/VideoFrameSink.h
     coral/playback/VideoOutput.h
     coral/playback/Volume.h
     coral/playback/win32/Win32WindowSurface.h
@@ -397,6 +398,8 @@ set(SRCS
     src/details/AvLivePlayer.h
     src/details/BaseRenderer.cpp
     src/details/BaseRenderer.h
+    src/details/CpuVideoFrameSink.cpp
+    src/details/CpuVideoFrameSink.h
     src/details/DecodeAudioRenderer.cpp
     src/details/DecodeAudioRenderer.h
     src/details/DecoderCounters.h
@@ -490,6 +493,8 @@ if (ANDROID)
   list(APPEND SRCS
       src/platform/android/AndroidJniSurface.cpp
       src/platform/android/AndroidSurface.cpp
+      src/platform/android/AndroidVideoFrameSink.cpp
+      src/platform/android/AndroidVideoFrameSink.h
       src/platform/android/AndroidVideoInput.cpp
       src/platform/android/AndroidVideoOutputNodeFactory.cpp
   )

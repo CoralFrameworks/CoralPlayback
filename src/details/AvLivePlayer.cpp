@@ -15,6 +15,7 @@
  */
 #include "AvLivePlayer.h"
 
+#include "CpuVideoFrameSink.h"
 #include "DecodeVideoRenderer.h"
 #include "ImageRenderer.h"
 #include "MetadataRenderer.h"
@@ -26,6 +27,7 @@
 #include <effect/NullOutputNode.h>
 #include <effect/VideoFrameInputNode.h>
 
+#include <coral/playback/VideoFrameSink.h>
 #include <coral/playback/VideoOutput.h>
 
 #include <extractor/text/DefaultSubtitleParserFactory.h>
@@ -150,18 +152,39 @@ AvLivePlayer::~AvLivePlayer() {
   clearRendererListeners();
 }
 
-void AvLivePlayer::enableVideoEffectPipeline(
-    const std::shared_ptr<VideoOutputNodeFactory>& factory) {
-  enableVideoEffectPipeline(factory, nullptr, nullptr);
+void AvLivePlayer::enableVideoEffectPipeline(const std::shared_ptr<VideoOutputNodeFactory>& factory) {
+  VideoEffectInput input;
+  const auto node = VideoFrameInputNode::create(2, 2, 8);
+  input.inputNode = node;
+  input.frameSink = std::make_shared<CpuVideoFrameSink>(node);
+  enableVideoEffectPipeline(factory, input);
 }
 
-void AvLivePlayer::enableVideoEffectPipeline(
-    const std::shared_ptr<VideoOutputNodeFactory>& factory,
-    const std::shared_ptr<EffectInputNode>& input,
-    const std::shared_ptr<VideoSurface>& decoderSurface,
-    void* sharedContext) {
+void AvLivePlayer::enableVideoEffectPipeline(const std::shared_ptr<VideoOutputNodeFactory>& factory,
+    const VideoEffectInput& input) {
   if (videoEffectGraph != nullptr) {
     return;
+  }
+
+  // The aggregate is allowed to omit the pieces the player can supply: a default CPU input, or the
+  // CPU sink over an application-created VideoFrameInputNode. A platform input node must bring its
+  // own sink, because only the platform knows how its frames are submitted.
+  VideoEffectInput resolved = input;
+  if (resolved.inputNode == nullptr) {
+    const auto node = VideoFrameInputNode::create(2, 2, 8);
+    resolved.inputNode = node;
+    if (resolved.frameSink == nullptr) {
+      resolved.frameSink = std::make_shared<CpuVideoFrameSink>(node);
+    }
+  }
+  if (resolved.frameSink == nullptr) {
+    if (const auto cpuInput = std::dynamic_pointer_cast<VideoFrameInputNode>(resolved.inputNode);
+        cpuInput != nullptr) {
+      resolved.frameSink = std::make_shared<CpuVideoFrameSink>(cpuInput);
+    } else {
+      MINILOG_ERROR("the effect input has no VideoFrameSink for its platform input node");
+      return;
+    }
   }
 
   EffectEngineConfig config;
@@ -171,20 +194,17 @@ void AvLivePlayer::enableVideoEffectPipeline(
 #if defined(__ANDROID__)
   config.backend = EffectBackend::OpenGL;
 #else
-  config.backend = sharedContext != nullptr ? EffectBackend::OpenGL : EffectBackend::Default;
+  config.backend = resolved.sharedContext != nullptr ? EffectBackend::OpenGL : EffectBackend::Default;
 #endif
   config.renderWidth = 2;
   config.renderHeight = 2;
   config.timeBase = 1'000'000;
   config.maxFramesInFlight = 2;
   config.backpressureMode = EffectBackpressureMode::DropOldest;
-  config.sharedContext = sharedContext;
+  config.sharedContext = resolved.sharedContext;
 
   effectEngine = EffectEngine::create(config);
-  std::shared_ptr<EffectInputNode> graphInput = input;
-  if (graphInput == nullptr) {
-    graphInput = VideoFrameInputNode::create(2, 2, 8);
-  }
+  const std::shared_ptr<EffectInputNode> graphInput = resolved.inputNode;
   const std::shared_ptr<NullOutputNode> nullOutput = NullOutputNode::create();
   if (effectEngine == nullptr || graphInput == nullptr || nullOutput == nullptr) {
     MINILOG_ERROR("could not create the effect engine or its input/output nodes");
@@ -203,9 +223,7 @@ void AvLivePlayer::enableVideoEffectPipeline(
   for (const auto& renderer : renderers) {
     if (auto video = std::dynamic_pointer_cast<DecodeVideoRenderer>(renderer); video != nullptr) {
       video->setVideoEffectGraph(videoEffectGraph);
-      if (decoderSurface != nullptr) {
-        video->setEffectInputSurface(decoderSurface);
-      }
+      video->setVideoFrameSink(resolved.frameSink, resolved.decoderSurface);
     } else if (auto image = std::dynamic_pointer_cast<ImageRenderer>(renderer); image != nullptr) {
       image->setVideoEffectGraph(videoEffectGraph);
     }

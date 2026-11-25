@@ -61,6 +61,7 @@ add_executable(${TARGET}
     test_UpstreamAndSelection.cpp
     test_VideoEffectGraph.cpp
     test_VideoFrameConverter.cpp
+    test_VideoFrameSink.cpp
     test_VideoLayoutPass.cpp
 )
 

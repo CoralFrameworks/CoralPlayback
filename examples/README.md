@@ -16,18 +16,20 @@ public pieces a macOS/iOS host supplies:
   target exists and how large it is;
 - a `VideoOutputNodeFactory` (`AppleVideoOutputNodeFactory`) that turns that surface into the graph's
   `AppleIOSurfaceOutputNode`;
-- an input node (`AppleVideoInput::createFrameInput`) for the decoded frames.
+- a `VideoEffectInput` aggregate containing the input node (`AppleVideoInput::createFrameInput`)
+  for the decoded frames. The demo leaves its sink empty, so the player installs the CPU sink.
 
-The decoded frame enters through the CPU fallback: CoralMedia's VideoToolbox decoder converts its NV12
-`CVPixelBuffer` into I420 planes, `VideoFrameInputNode` copies them into its queue and uploads them on
-the effect render thread. The graph composes the frame and `AppleIOSurfaceOutputNode` copies the final
-image into the output surface on the GPU. The window is a layer-backed `NSView`: its `CALayer.contents`
-is the surface, so presenting a frame costs one property assignment and no pixel copy. A production
-host can hand the same surface to a Metal compositor or a video encoder instead.
+The decoded frame enters through the CPU sink: CoralMedia's VideoToolbox decoder converts its NV12
+`CVPixelBuffer` into I420 planes, `CpuVideoFrameSink` converts them to `VideoFrameDesc`, and
+`VideoFrameInputNode` copies them into its queue and uploads them on the effect render thread. The
+graph composes the frame and `AppleIOSurfaceOutputNode` copies the final image into the output
+surface on the GPU. The window is a layer-backed `NSView`: its `CALayer.contents` is the surface, so
+presenting a frame costs one property assignment and no pixel copy. A production host can hand the
+same surface to a Metal compositor or a video encoder instead.
 
-The zero-copy input (`AppleVideoInput::createIOSurfaceInput` over `AppleIOSurfaceInputNode`) is part of
-the library but is not wired into `DecodeVideoRenderer` yet; the demo documents the CPU fallback that
-works today.
+The zero-copy node (`AppleVideoInput::createIOSurfaceInput` over `AppleIOSurfaceInputNode`) is part of
+the library. Wiring it needs an Apple `VideoFrameSink` and a decoder layout it can import; that work
+stays in the Apple platform layer and does not change `DecodeVideoRenderer`.
 
 ## What it verifies
 

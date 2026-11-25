@@ -401,13 +401,16 @@ public:
     // The decoded frames enter through the CPU fallback node: the decoder hands the graph NV12/I420
     // planes and the node uploads them to the GPU. The output factory turns the IOSurface into the
     // graph's `AppleIOSurfaceOutputNode`.
-    auto input = coral::AppleVideoInput::createFrameInput(renderWidth, renderHeight, 8);
-    if (input == nullptr) {
+    coral::VideoEffectInput effectInput;
+    effectInput.inputNode = coral::AppleVideoInput::createFrameInput(renderWidth, renderHeight, 8);
+    if (effectInput.inputNode == nullptr) {
       std::fprintf(stderr, "error: could not create the effect input node\n");
       return nullptr;
     }
-    player->enableVideoEffectPipeline(std::make_shared<coral::AppleVideoOutputNodeFactory>(), input,
-                                      nullptr);
+    // No frameSink is set: the player installs the CPU sink because the input is a
+    // VideoFrameInputNode. A platform sink is what a hardware zero-copy path adds later.
+    player->enableVideoEffectPipeline(
+        std::make_shared<coral::AppleVideoOutputNodeFactory>(), effectInput);
     if (!player->isVideoEffectPipelineEnabled()) {
       std::fprintf(stderr, "error: the effect video pipeline could not be enabled\n");
       return nullptr;

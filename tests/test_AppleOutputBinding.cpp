@@ -358,7 +358,9 @@ TEST(AppleLivePlayerEffectTest, RendersARealVideoIntoTheOutputSurface) {
 
   const auto input = AppleVideoInput::createFrameInput(320, 180, 4);
   ASSERT_NE(input, nullptr);
-  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), input, nullptr);
+  VideoEffectInput effectInput;
+  effectInput.inputNode = input;
+  player->enableVideoEffectPipeline(std::make_shared<AppleVideoOutputNodeFactory>(), effectInput);
   ASSERT_TRUE(player->isVideoEffectPipelineEnabled());
   player->setOutputSurface(surface);
 

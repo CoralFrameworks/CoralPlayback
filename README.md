@@ -178,11 +178,17 @@ decoder, each supplied by the framework below CoralPlayback:
   graph's `AppleIOSurfaceOutputNode`, which copies the composed frame into the surface on the GPU.
   The host then presents that surface without a readback — `examples/video_player_demo.mm` assigns it
   to a layer-backed `NSView`'s `CALayer.contents`, and an export session would hand the same surface
-  to its encoder. Decoded frames enter the graph through the CPU fallback `VideoFrameInputNode`
-  (`AppleVideoInput::createFrameInput`): CoralMedia's Darwin decoder converts its NV12
-  `CVPixelBuffer` into planes, and the node uploads them on the render thread. The zero-copy input
-  (`AppleVideoInput::createIOSurfaceInput` over `AppleIOSurfaceInputNode`) is available in the
-  library; the renderer's surface-backed submit path is the next milestone.
+  to its encoder.
+- **Video input** — `DecodeVideoRenderer` never inspects a platform frame. It hands each decoded
+  `AVPixelBuffer` to a `VideoFrameSink`, and the platform implementation converts or publishes it.
+  A `VideoEffectInput` aggregates the graph's input node, the decoder surface and the sink (plus an
+  optional platform graphics context) so the host has one entry point. The default CPU sink
+  (`CpuVideoFrameSink`) converts I420/NV12 planes and uploads them through `VideoFrameInputNode`;
+  Android adds a pull-model SurfaceTexture sink that only releases the codec buffer while
+  `AndroidSurfaceTextureInputNode` samples the texture on the render thread. Apple's zero-copy
+  node (`AppleVideoInput::createIOSurfaceInput` over `AppleIOSurfaceInputNode`) is ready; its
+  platform sink and NV12/BGRA handling are the next step, which can be added without touching the
+  player core.
 
 The standalone configure enables Objective-C++ before the dependencies are added, which is what the
 Darwin sources of CoralCore, CoralMedia and CoralSubtitle need. CoralGraphics' Metal frame clock uses

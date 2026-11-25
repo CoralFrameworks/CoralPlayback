@@ -18,6 +18,7 @@
 
 #include <coral/playback/Player.h>
 #include <coral/playback/LottieOverlay.h>
+#include <coral/playback/VideoFrameSink.h>
 
 #include <coral/source/MediaItem.h>
 
@@ -28,7 +29,6 @@ namespace coral {
 
 class VideoOutputNodeFactory;
 class EffectEngine;
-class EffectInputNode;
 class VideoSurface;
 
 /**
@@ -87,17 +87,18 @@ public:
   void enableVideoEffectPipeline(const std::shared_ptr<VideoOutputNodeFactory>& factory = nullptr);
 
   /**
-   * Enables the pipeline with a platform input node and the decoder surface that feeds it.
+   * Enables the pipeline with an aggregated platform input.
    *
-   * <p>This is the zero-copy entry point. Android passes a `SurfaceTexture` input node and a
-   * `VideoSurface` over the decoder's Java Surface; macOS/iOS pass an `AppleIOSurfaceInputNode` over
-   * the decoder's `CVPixelBuffer` surface. A host that keeps the CPU fallback passes null for
-   * @p decoderSurface, or uses the factory-only overload above.
+   * <p>The input carries the graph's input node, the decoder surface that feeds it, the
+   * `VideoFrameSink` that adapts decoded frames to the platform input, and an optional platform
+   * graphics context. This is the zero-copy entry point: an Android host passes a SurfaceTexture
+   * node and the Java `Surface` wrapper; a future Apple/Windows sink passes its hardware surface.
+   *
+   * <p>A host that keeps the CPU fallback can omit the sink when `inputNode` is a
+   * `VideoFrameInputNode`, or use the factory-only overload above.
    */
   void enableVideoEffectPipeline(const std::shared_ptr<VideoOutputNodeFactory>& factory,
-      const std::shared_ptr<EffectInputNode>& input,
-      const std::shared_ptr<VideoSurface>& decoderSurface,
-      void* sharedContext = nullptr);
+      const VideoEffectInput& input);
 
   [[nodiscard]] bool isVideoEffectPipelineEnabled() const;
 
