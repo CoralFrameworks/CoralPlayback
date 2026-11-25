@@ -384,8 +384,10 @@ TEST(AppleIOSurfaceOutputTest, RendersAGraphFrameIntoTheSurface) {
 // NV12 input
 // ==================================================================================================
 
-/** Creates an IOSurface-backed NV12 pixel buffer filled with BT.709 limited-range red. */
-CVPixelBufferRef createRedNv12Buffer(const uint32_t width, const uint32_t height) {
+/** Creates an IOSurface-backed NV12 pixel buffer with the given BT.709 limited-range planes. */
+CVPixelBufferRef createNv12Buffer(const uint32_t width, const uint32_t height,
+                                  const uint8_t lumaValue, const uint8_t chromaU,
+                                  const uint8_t chromaV) {
   CFMutableDictionaryRef attributes = CFDictionaryCreateMutable(
       kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
   if (attributes == nullptr) {
@@ -427,13 +429,13 @@ CVPixelBufferRef createRedNv12Buffer(const uint32_t width, const uint32_t height
   const size_t lumaStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0);
   const size_t chromaStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 1);
   for (uint32_t row = 0; row < height; ++row) {
-    std::memset(luma + row * lumaStride, 63, width); // BT.709 limited-range red luma
+    std::memset(luma + row * lumaStride, lumaValue, width);
   }
   for (uint32_t row = 0; row < (height + 1) / 2; ++row) {
     uint8_t* pixel = chroma + row * chromaStride;
     for (uint32_t column = 0; column < (width + 1) / 2; ++column) {
-      pixel[column * 2 + 0] = 102; // Cb
-      pixel[column * 2 + 1] = 240; // Cr
+      pixel[column * 2 + 0] = chromaU;
+      pixel[column * 2 + 1] = chromaV;
     }
   }
   CVPixelBufferUnlockBaseAddress(buffer, 0);
@@ -442,7 +444,7 @@ CVPixelBufferRef createRedNv12Buffer(const uint32_t width, const uint32_t height
 
 TEST(AppleIOSurfaceInputTest, ConvertsBiPlanarNv12ToRgba) {
   constexpr uint32_t kSize = 64;
-  CVPixelBufferRef buffer = createRedNv12Buffer(kSize, kSize);
+  CVPixelBufferRef buffer = createNv12Buffer(kSize, kSize, 63, 102, 240);
   ASSERT_NE(buffer, nullptr);
   IOSurfaceRef surface = CVPixelBufferGetIOSurface(buffer);
   ASSERT_NE(surface, nullptr);
@@ -496,6 +498,88 @@ TEST(AppleIOSurfaceInputTest, ConvertsBiPlanarNv12ToRgba) {
 
   engine->stop();
   CVPixelBufferRelease(buffer);
+}
+
+TEST(AppleIOSurfaceInputTest, HandlesSizeChangesWithoutStaleFrames) {
+  constexpr uint32_t kRenderSize = 64;
+
+  EffectEngineConfig config;
+  config.backend = EffectBackend::Metal;
+  config.renderMode = EffectRenderMode::Manual;
+  config.renderWidth = kRenderSize;
+  config.renderHeight = kRenderSize;
+  config.timeBase = 1'000'000;
+  const auto engine = EffectEngine::create(config);
+  ASSERT_NE(engine, nullptr);
+
+  const auto input = AppleIOSurfaceInputNode::create(kRenderSize, kRenderSize,
+                                                     EffectPixelFormat::YUV420);
+  ASSERT_NE(input, nullptr);
+  const auto pass = engine->createEffectNode("pass");
+  ASSERT_NE(pass, nullptr);
+  EffectShaderDesc shader;
+  shader.name = "apple-nv12-size-change";
+  shader.fragmentSource = "  return texture(uInput0, uv);";
+  shader.inputCount = 1;
+  ASSERT_EQ(pass->setShader(shader), EffectResult::Success);
+  const auto output = ReadbackOutputNode::create();
+  ASSERT_NE(output, nullptr);
+
+  ASSERT_EQ(engine->attach(input), EffectResult::Success);
+  ASSERT_EQ(engine->attach(output), EffectResult::Success);
+  ASSERT_EQ(engine->connect(input, pass), EffectResult::Success);
+  ASSERT_EQ(engine->connect(pass, output), EffectResult::Success);
+  ASSERT_EQ(engine->setOutput(output), EffectResult::Success);
+  if (engine->start() != EffectResult::Success) {
+    GTEST_SKIP() << "the effect engine could not start on this host: " << engine->diagnostics();
+  }
+
+  int64_t timestampUs = 0;
+  auto render = [&](const uint32_t width, const uint32_t height, const uint8_t luma,
+                    const uint8_t chromaU, const uint8_t chromaV) {
+    CVPixelBufferRef buffer = createNv12Buffer(width, height, luma, chromaU, chromaV);
+    EXPECT_NE(buffer, nullptr);
+    if (buffer == nullptr) {
+      return std::vector<uint8_t>();
+    }
+    IOSurfaceRef surface = CVPixelBufferGetIOSurface(buffer);
+    EXPECT_NE(surface, nullptr);
+    const auto result = input->submit(surface, width, height, EffectPixelFormat::YUV420,
+                                      RenderTime::fromTicks(timestampUs, 1'000'000));
+    EXPECT_EQ(result, EffectResult::Success) << engine->diagnostics();
+    timestampUs += 40'000;
+    EXPECT_EQ(input->width(), width);
+    EXPECT_EQ(input->height(), height);
+
+    EXPECT_EQ(engine->execute(), EffectResult::Success) << engine->diagnostics();
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success) << engine->diagnostics();
+    EffectFrame metadata;
+    std::vector<uint8_t> pixels;
+    EXPECT_TRUE(output->waitForFrame(&metadata, &pixels)) << engine->diagnostics();
+    CVPixelBufferRelease(buffer);
+    return pixels;
+  };
+
+  const auto red = render(64, 64, 63, 102, 240);
+  ASSERT_FALSE(red.empty());
+  const size_t centre = (static_cast<size_t>(kRenderSize / 2) * kRenderSize + kRenderSize / 2) * 4;
+  EXPECT_GE(red[centre + 0], 245u) << "first frame should be red";
+  EXPECT_LE(red[centre + 1], 8u);
+  EXPECT_LE(red[centre + 2], 8u);
+
+  const auto white = render(96, 48, 235, 128, 128);
+  ASSERT_FALSE(white.empty());
+  EXPECT_GE(white[centre + 0], 245u) << "the resized frame should be white, not the old red frame";
+  EXPECT_GE(white[centre + 1], 245u);
+  EXPECT_GE(white[centre + 2], 245u);
+
+  const auto black = render(128, 72, 16, 128, 128);
+  ASSERT_FALSE(black.empty());
+  EXPECT_LE(black[centre + 0], 8u) << "the second resize should be black, not a previous frame";
+  EXPECT_LE(black[centre + 1], 8u);
+  EXPECT_LE(black[centre + 2], 8u);
+
+  engine->stop();
 }
 
 // ==================================================================================================

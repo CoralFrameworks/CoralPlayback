@@ -355,6 +355,10 @@ public:
     }
   }
 
+  void onVideoSizeChanged(const int width, const int height) override {
+    std::fprintf(stderr, "video size: %dx%d\n", width, height);
+  }
+
   void onPlayerError(const std::string& errorMessage) override {
     std::lock_guard<std::mutex> lock(mMutex);
     mError = errorMessage;
