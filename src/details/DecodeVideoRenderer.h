@@ -19,7 +19,6 @@
 
 #include "BaseRenderer.h"
 #include "DecoderCounters.h"
-#include "VideoFrameConverter.h"
 
 #include <coral/playback/TimedFormatQueue.h>
 #include <coral/source/FormatHolder.h>
@@ -30,6 +29,7 @@
 namespace coral {
 
 class VideoEffectGraph;
+class VideoFrameSink;
 
 /**
  * The implementation of the BaseRenderer for video track
@@ -43,17 +43,25 @@ public:
   /**
    * Switches the renderer to the effect graph.
    *
-   * <p>When a graph is set, the renderer stops using the platform surface and
-   * `VideoEffectGraph`; decoded surface frames are presented by its output node.
-   * node presents them. Passing null restores the legacy path.
+   * <p>When a graph is set, presentation belongs to the graph's output node. Decoded frames are
+   * handed to the sink installed by {@link setVideoFrameSink}; the legacy renderer surface is not
+   * used. Passing null restores the legacy path.
    */
   void setVideoEffectGraph(std::shared_ptr<VideoEffectGraph> graph);
 
   /**
-   * Routes the decoder output into an effect input that consumes the decoder's surface itself
-   * (Android SurfaceTexture). The graph must already have that input installed.
+   * Installs the platform frame sink and the decoder surface that feeds it.
+   *
+   * <p>The sink is the only part of the effect path that knows how a decoded `AVPixelBuffer`
+   * becomes an effect input. The renderer never inspects the frame's platform type. The decoder
+   * surface is null for a CPU sink and is the platform `VideoSurface` (SurfaceTexture, D3D11,
+   * IOSurface) for a hardware sink.
+   *
+   * <p>Must be called before the decoder is created; a later change reinitializes an existing
+   * decoder.
    */
-  void setEffectInputSurface(const std::shared_ptr<VideoSurface>& surface);
+  void setVideoFrameSink(std::shared_ptr<VideoFrameSink> sink,
+                         std::shared_ptr<VideoSurface> decoderSurface);
 
   [[nodiscard]] bool hasVideoEffectGraph() const noexcept { return mVideoEffectGraph != nullptr; }
 
@@ -362,14 +370,14 @@ private:
   std::shared_ptr<AVPixelBuffer> mOutputBuffer;
   std::unique_ptr<TimedFormatQueue> mFormatQueue;
 
-  //!< video surface to render
+  //!< legacy presentation surface, used only when no effect graph is installed
   std::shared_ptr<VideoSurface> mSurface;
   //!< the effect graph when the player is in effect mode
   std::shared_ptr<VideoEffectGraph> mVideoEffectGraph;
-  //!< true when the graph input samples the decoder surface directly
-  bool mZeroCopyEffectInput = false;
-  //!< CPU fallback conversion for the effect input
-  VideoFrameConverter mFrameConverter;
+  //!< the platform frame adapter for the effect graph, or null
+  std::shared_ptr<VideoFrameSink> mFrameSink;
+  //!< the decoder surface the sink's input samples, or null for CPU frames
+  std::shared_ptr<VideoSurface> mEffectDecoderSurface;
   std::unique_ptr<VideoFrameMetadataListener> mFrameMetadataListener;
   RenderType mRenderType;
 

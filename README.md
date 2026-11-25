@@ -24,9 +24,9 @@ src/details/            AvLivePlayer, the renderers, the effect graph and the la
 src/source/             the media-source implementation
 src/selection/          the track-selection implementation
 src/upstream/           the loading implementation
-src/platform/           the platform bridges (Win32 window, Android surface)
+src/platform/           the platform bridges (Win32 window, Android surface, Apple IOSurface)
 tests/                  the unit suites
-examples/               the standalone Cocoa demo and its readback output factory
+examples/               the standalone Cocoa demo and its IOSurface output factory
 assets/                 the fixtures of the tests and the demo
 scripts/                the bootstrap tools that fetch the dependency repositories
 ```
@@ -44,8 +44,10 @@ ProgressiveMediaSource -> DecodeVideoRenderer -> VideoFrameInputNode
 
 The last step is platform-specific, and `VideoOutputNodeFactory` is the seam: the application hands
 the player a `VideoSurface`, and the factory returns the `EffectOutputNode` that receives the composed
-frames. The Windows bridge returns a swap-chain output; Android returns a surface output. A host
-without a window (tests, export) can return `ReadbackOutputNode` or `TextureOutputNode` instead.
+frames. The Windows bridge returns a swap-chain output; Android returns a surface output; macOS and
+iOS return an IOSurface output (`AppleIOSurfaceOutputNode`) that Core Animation, Metal or a video
+encoder consumes without a CPU copy. A host without a window (tests, export) can return
+`ReadbackOutputNode` or `TextureOutputNode` instead.
 
 ## Building
 
@@ -171,9 +173,25 @@ decoder, each supplied by the framework below CoralPlayback:
   playback stayed in `BUFFERING` and the position never moved. `DecodeAudioRenderer` now splits an
   output buffer into sink-sized chunks, which is also what makes it independent of the output
   granularity of any decoder. `check-audio` exercises this path end to end.
-- **Video output** — the library provides the platform bridges for Win32 and Android. A macOS window
-  supplies its own `VideoOutputNodeFactory`; `examples/video_player_demo.mm` is the reference:
-  `ReadbackOutputNode` for the composed frame, then a Cocoa `NSImage` per displayed frame.
+- **Video output** — the library provides the platform bridges for Win32, Android and Apple. On macOS
+  and iOS an `AppleIOSurface` is the output target: `AppleVideoOutputNodeFactory` turns it into the
+  graph's `AppleIOSurfaceOutputNode`, which copies the composed frame into the surface on the GPU.
+  The host then presents that surface without a readback — `examples/video_player_demo.mm` assigns it
+  to a layer-backed `NSView`'s `CALayer.contents`, and an export session would hand the same surface
+  to its encoder.
+- **Video input** — `DecodeVideoRenderer` never inspects a platform frame. It hands each decoded
+  `AVPixelBuffer` to a `VideoFrameSink`, and the platform implementation converts or publishes it.
+  A `VideoEffectInput` aggregates the graph's input node, the decoder surface and the sink (plus an
+  optional platform graphics context) so the host has one entry point. The default CPU sink
+  (`CpuVideoFrameSink`) converts I420/NV12 planes and uploads them through `VideoFrameInputNode`;
+  Android adds a pull-model SurfaceTexture sink that only releases the codec buffer while
+  `AndroidSurfaceTextureInputNode` samples the texture on the render thread. Apple's
+  `AppleVideoInput::createZeroCopyInput` aggregates `AppleHardwareVideoSurface`,
+  `AppleVideoFrameSink` and `AppleIOSurfaceInputNode`. On Metal the sink asks the decoder for NV12
+  through `MediaFormat::processFormat`; the input node imports the two planes and converts them in
+  one GPU pass, so the decoder's own IOSurface is submitted without a CPU copy. On OpenGL/ES the
+  sink asks for BGRA and the decoder performs the YUV-to-RGB conversion. The conversion ring remains
+  only for a decoder that ignores the request, or for HDR NV12.
 
 The standalone configure enables Objective-C++ before the dependencies are added, which is what the
 Darwin sources of CoralCore, CoralMedia and CoralSubtitle need. CoralGraphics' Metal frame clock uses
@@ -206,6 +224,7 @@ ctest --test-dir build -R test_playback_audio --output-on-failure
 # or one binary with GoogleTest's filters
 ./build/tests/test_playback_source --gtest_filter='MergePlayer.*'
 ./build/tests/test_playback_source --gtest_filter='AudioPlaybackTest.*'
+./build/tests/test_playback_source --gtest_filter='Apple*'
 ```
 
 `check` runs the suites that do not need an audio device. `check-audio` runs the two
@@ -218,7 +237,9 @@ A plain `ctest` also lists the test cases the dependency trees register. Their e
 targets and the `-R` filters run only CoralPlayback's suites.
 
 The GPU-backed cases (the effect graph and the layout pass) start a real device. On a host where the
-Metal device cannot be created they skip with the engine's diagnostics instead of failing.
+Metal device cannot be created they skip with the engine's diagnostics instead of failing. The Apple
+cases (`Apple*`) create a real `IOSurface`, bind it through `AppleVideoOutputNodeFactory`, render a
+frame into it and play the fixture through it; they take the same skip when the device is missing.
 
 ## Examples
 
@@ -239,18 +260,21 @@ is Cocoa:
 ```sh
 ./build-demo/video_player_demo                              # windowed, plays to the end
 ./build-demo/video_player_demo clip.mp4 --size 1280x720
-./build-demo/video_player_demo clip.mp4 --frames 120        # stop after 120 displayed frames
+./build-demo/video_player_demo clip.mp4 --frames 120        # stop after 120 presented frames
+./build-demo/video_player_demo clip.mp4 --cpu               # CPU plane fallback
 ./build-demo/video_player_demo clip.mp4 --output frames --frames 30   # headless PNGs
 ./build-demo/video_player_demo clip.mp4 --no-audio          # video only, no output device
 ./build-demo/video_player_demo clip.mp4 --mute              # keep the device, at zero volume
 ```
 
 The windowed demo plays the sound track by default; `--no-audio` builds no audio renderer, so it
-also runs on a machine without an output device. `--output` is headless and leaves the audio off
-unless `--audio` is passed. The window shows each frame the effect graph commits; Esc/Q or closing the
-window ends it. With `--output <dir>` the demo writes
-`frame_00001.png` per received frame and does not open a window, so a build machine can verify that
-decoding and composition produced pixels:
+also runs on a machine without an output device. It uses the zero-copy Apple sink unless `--cpu`
+asks for the plane upload. `--output` is headless and leaves the audio off unless `--audio` is
+passed. The window presents the output IOSurface through a layer-backed view and
+updates it on every frame the effect graph commits; Esc/Q or closing the window ends it. With
+`--output <dir>` the demo reads the same IOSurface back (after waiting for the GPU) and writes
+`frame_00001.png` per sampled presentation position, without opening a window, so a build machine can
+verify that decoding, composition and the IOSurface output produced pixels:
 
 ```sh
 ./build-demo/video_player_demo assets/video/video720p_5s.mp4 --output /tmp/coral-frames --frames 5

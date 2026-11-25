@@ -305,6 +305,7 @@ set(PUBLIC_HDRS
     coral/playback/StandaloneClock.h
     coral/playback/TextOutput.h
     coral/playback/TimedFormatQueue.h
+    coral/playback/VideoFrameSink.h
     coral/playback/VideoOutput.h
     coral/playback/Volume.h
     coral/playback/win32/Win32WindowSurface.h
@@ -384,11 +385,22 @@ if (ANDROID)
   )
 endif ()
 
+if (APPLE)
+  list(APPEND PUBLIC_HDRS
+      coral/playback/apple/AppleHardwareVideoSurface.h
+      coral/playback/apple/AppleIOSurface.h
+      coral/playback/apple/AppleVideoInput.h
+      coral/playback/apple/AppleVideoOutputNodeFactory.h
+  )
+endif ()
+
 set(SRCS
     src/details/AvLivePlayer.cpp
     src/details/AvLivePlayer.h
     src/details/BaseRenderer.cpp
     src/details/BaseRenderer.h
+    src/details/CpuVideoFrameSink.cpp
+    src/details/CpuVideoFrameSink.h
     src/details/DecodeAudioRenderer.cpp
     src/details/DecodeAudioRenderer.h
     src/details/DecoderCounters.h
@@ -482,8 +494,21 @@ if (ANDROID)
   list(APPEND SRCS
       src/platform/android/AndroidJniSurface.cpp
       src/platform/android/AndroidSurface.cpp
+      src/platform/android/AndroidVideoFrameSink.cpp
+      src/platform/android/AndroidVideoFrameSink.h
       src/platform/android/AndroidVideoInput.cpp
       src/platform/android/AndroidVideoOutputNodeFactory.cpp
+  )
+endif ()
+
+if (APPLE)
+  list(APPEND SRCS
+      src/platform/apple/AppleHardwareVideoSurface.mm
+      src/platform/apple/AppleIOSurface.mm
+      src/platform/apple/AppleVideoFrameSink.h
+      src/platform/apple/AppleVideoFrameSink.mm
+      src/platform/apple/AppleVideoInput.mm
+      src/platform/apple/AppleVideoOutputNodeFactory.mm
   )
 endif ()
 
@@ -520,6 +545,15 @@ if (WIN32 AND NOT ANDROID)
   target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC effect_win)
 elseif (ANDROID)
   target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC effect_android)
+elseif (APPLE)
+  # The Apple bridge builds its output from `AppleIOSurfaceOutputNode` and its zero-copy input from
+  # `AppleIOSurfaceInputNode`; both live in CoralGraphics' `effect_apple` target.
+  target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC effect_apple)
+  target_link_libraries(${CORAL_PLAYBACK_TARGET} PRIVATE
+      "-framework CoreFoundation"
+      "-framework CoreVideo"
+      "-framework IOSurface"
+      "-framework VideoToolbox")
 endif ()
 
 # ==================================================================================================

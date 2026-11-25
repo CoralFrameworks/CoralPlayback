@@ -21,11 +21,25 @@ if (NOT EXISTS "${CORAL_SUBTITLE_SRC_DIR}/HorizontalTextLayout.h")
 endif ()
 
 # The Lottie fixture and the fonts come with CoralGraphics, which the tests use through the effect
-# graph; the checkout is under external/ for a standalone build.
-set(CORAL_GRAPHICS_RESOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../external/CoralGraphics/modules/graphics/resources")
-if (NOT EXISTS "${CORAL_GRAPHICS_RESOURCE_DIR}/apitest/lottie/gear.json")
-  set(CORAL_GRAPHICS_RESOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../CoralGraphics/modules/graphics/resources")
-endif ()
+# graph; the checkout is under external/ for a standalone build and beside this repository in an
+# application tree. CoralGraphics keeps its resources at the repository root as a standalone project
+# and under modules/graphics in the older module layout, so both are probed.
+set(CORAL_GRAPHICS_RESOURCE_DIR "")
+foreach (_coral_graphics_root
+    "${CMAKE_CURRENT_SOURCE_DIR}/../external/CoralGraphics"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../CoralGraphics")
+  foreach (_coral_graphics_resources IN ITEMS "resources" "modules/graphics/resources")
+    if (EXISTS "${_coral_graphics_root}/${_coral_graphics_resources}/apitest/lottie/gear.json")
+      set(CORAL_GRAPHICS_RESOURCE_DIR "${_coral_graphics_root}/${_coral_graphics_resources}")
+      break()
+    endif ()
+  endforeach ()
+  if (CORAL_GRAPHICS_RESOURCE_DIR)
+    break()
+  endif ()
+endforeach ()
+unset(_coral_graphics_root)
+unset(_coral_graphics_resources)
 
 add_executable(${TARGET}
     test_main.cpp
@@ -47,6 +61,7 @@ add_executable(${TARGET}
     test_UpstreamAndSelection.cpp
     test_VideoEffectGraph.cpp
     test_VideoFrameConverter.cpp
+    test_VideoFrameSink.cpp
     test_VideoLayoutPass.cpp
 )
 
@@ -64,6 +79,13 @@ target_compile_definitions(${TARGET} PRIVATE CORAL_GRAPHICS_RESOURCE_DIR="${CORA
 if (WIN32 AND NOT ANDROID)
   target_sources(${TARGET} PRIVATE test_WindowsOutputBinding.cpp test_LivePlayerEffect.cpp)
   target_link_libraries(${TARGET} PRIVATE effect_win)
+endif ()
+
+if (APPLE)
+  # The Apple bridge: the IOSurface wrapper, the output factory and the IOSurface output node. The
+  # platform headers come from `effect_apple`, which `playback` links publicly.
+  target_sources(${TARGET} PRIVATE test_AppleOutputBinding.cpp)
+  target_link_libraries(${TARGET} PRIVATE effect_apple "-framework CoreVideo")
 endif ()
 
 set_target_properties(${TARGET} PROPERTIES FOLDER Tests)

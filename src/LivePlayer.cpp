@@ -101,11 +101,9 @@ void LivePlayer::enableVideoEffectPipeline(
 
 void LivePlayer::enableVideoEffectPipeline(
     const std::shared_ptr<VideoOutputNodeFactory>& factory,
-    const std::shared_ptr<EffectInputNode>& input,
-    const std::shared_ptr<VideoSurface>& decoderSurface,
-    void* sharedContext) {
+    const VideoEffectInput& input) {
   if (auto* player = dynamic_cast<AvLivePlayer*>(mImpl.get()); player != nullptr) {
-    player->enableVideoEffectPipeline(factory, input, decoderSurface, sharedContext);
+    player->enableVideoEffectPipeline(factory, input);
   }
 }
 

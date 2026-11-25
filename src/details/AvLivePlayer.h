@@ -50,10 +50,10 @@ namespace coral {
 class MetadataRenderer;
 class TextRenderer;
 class EffectEngine;
-class EffectInputNode;
 class VideoEffectGraph;
 class VideoOutputNodeFactory;
 struct LottieOverlayConfig;
+struct VideoEffectInput;
 
 class AvLivePlayer final : public Player,
                            public DefaultMediaClock::PlaybackParametersListener,
@@ -78,13 +78,15 @@ public:
   void enableVideoEffectPipeline(const std::shared_ptr<VideoOutputNodeFactory>& factory = nullptr);
 
   /**
-   * Enables the effect pipeline with a platform input node and, optionally, the decoder surface
-   * that feeds it (Android SurfaceTexture zero-copy).
+   * Enables the effect pipeline with an aggregated platform input.
+   *
+   * <p>The input carries the graph's input node, the decoder surface the platform sink samples, the
+   * sink itself, and an optional platform graphics context. A missing sink is filled with the CPU
+   * sink when the input node is a `VideoFrameInputNode`; a missing input creates the default CPU
+   * input.
    */
   void enableVideoEffectPipeline(const std::shared_ptr<VideoOutputNodeFactory>& factory,
-                                 const std::shared_ptr<EffectInputNode>& input,
-                                 const std::shared_ptr<VideoSurface>& decoderSurface,
-                                 void* sharedContext = nullptr);
+                                 const VideoEffectInput& input);
 
   [[nodiscard]] bool isVideoEffectPipelineEnabled() const noexcept {
     return videoEffectGraph != nullptr;

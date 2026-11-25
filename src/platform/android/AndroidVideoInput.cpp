@@ -16,17 +16,55 @@
 
 #include <coral/playback/android/AndroidVideoInput.h>
 
+#include <coral/playback/android/AndroidJniSurface.h>
+
+#include "AndroidVideoFrameSink.h"
+
 #include <effect/platform/android/AndroidSurfaceTextureInputNode.h>
+
 
 namespace coral {
 
-std::shared_ptr<EffectInputNode> AndroidVideoInput::createSurfaceTextureInput(
+VideoEffectInput AndroidVideoInput::createSurfaceTextureInput(
     JNIEnv* env, jobject surfaceTexture, const uint32_t textureName, const uint32_t width,
     const uint32_t height) {
+  VideoEffectInput input;
   if (env == nullptr || surfaceTexture == nullptr || textureName == 0 || width == 0 || height == 0) {
-    return nullptr;
+    return input;
   }
-  return AndroidSurfaceTextureInputNode::create(env, surfaceTexture, textureName, width, height);
+
+  const auto node = AndroidSurfaceTextureInputNode::create(env, surfaceTexture, textureName, width,
+                                                           height);
+  if (node == nullptr) {
+    return input;
+  }
+
+  // MediaCodec wants the Java Surface object, not an ANativeWindow, so the decoder surface wraps a
+  // Surface created from the application's SurfaceTexture.
+  jclass surfaceClass = env->FindClass("android/view/Surface");
+  if (surfaceClass == nullptr) {
+    return input;
+  }
+  const jmethodID constructor = env->GetMethodID(
+      surfaceClass, "<init>", "(Landroid/graphics/SurfaceTexture;)V");
+  jobject javaSurface = constructor != nullptr
+                          ? env->NewObject(surfaceClass, constructor, surfaceTexture)
+                          : nullptr;
+  const auto decoderSurface = javaSurface != nullptr
+                                ? AndroidJniSurface::fromSurface(env, javaSurface)
+                                : nullptr;
+  if (javaSurface != nullptr) {
+    env->DeleteLocalRef(javaSurface);
+  }
+  env->DeleteLocalRef(surfaceClass);
+  if (decoderSurface == nullptr) {
+    return input;
+  }
+
+  input.inputNode = node;
+  input.decoderSurface = decoderSurface;
+  input.frameSink = std::make_shared<AndroidSurfaceTextureFrameSink>();
+  return input;
 }
 
 } // namespace coral

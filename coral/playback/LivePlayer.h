@@ -18,6 +18,7 @@
 
 #include <coral/playback/Player.h>
 #include <coral/playback/LottieOverlay.h>
+#include <coral/playback/VideoFrameSink.h>
 
 #include <coral/source/MediaItem.h>
 
@@ -28,7 +29,6 @@ namespace coral {
 
 class VideoOutputNodeFactory;
 class EffectEngine;
-class EffectInputNode;
 class VideoSurface;
 
 /**
@@ -84,20 +84,21 @@ public:
    * `setOutputSurface`; the factory turns the platform surface into an output node. Passing null
    * keeps the graph headless (tests/readback).
    */
-  void enableVideoEffectPipeline(
-      const std::shared_ptr<VideoOutputNodeFactory>& factory = nullptr);
+  void enableVideoEffectPipeline(const std::shared_ptr<VideoOutputNodeFactory>& factory = nullptr);
 
   /**
-   * Enables the pipeline with a platform input node and the decoder surface that feeds it.
+   * Enables the pipeline with an aggregated platform input.
    *
-   * <p>This is the Android SurfaceTexture zero-copy entry point: the application creates the
-   * input node and a `VideoSurface` over the decoder's Java Surface, then hands both here.
+   * <p>The input carries the graph's input node, the decoder surface that feeds it, the
+   * `VideoFrameSink` that adapts decoded frames to the platform input, and an optional platform
+   * graphics context. This is the zero-copy entry point: an Android host passes a SurfaceTexture
+   * node and the Java `Surface` wrapper; a future Apple/Windows sink passes its hardware surface.
+   *
+   * <p>A host that keeps the CPU fallback can omit the sink when `inputNode` is a
+   * `VideoFrameInputNode`, or use the factory-only overload above.
    */
-  void enableVideoEffectPipeline(
-      const std::shared_ptr<VideoOutputNodeFactory>& factory,
-      const std::shared_ptr<EffectInputNode>& input,
-      const std::shared_ptr<VideoSurface>& decoderSurface,
-      void* sharedContext = nullptr);
+  void enableVideoEffectPipeline(const std::shared_ptr<VideoOutputNodeFactory>& factory,
+      const VideoEffectInput& input);
 
   [[nodiscard]] bool isVideoEffectPipelineEnabled() const;
 
@@ -114,8 +115,9 @@ public:
   void clearLottieOverlays();
 
   /**
-   * Sets the surface to be used as the sink for the video portion of the media. Only available for
-   * Android. The platform surface is translated by a VideoOutputNodeFactory.
+   * Sets the surface to be used as the sink for the video portion of the media. The platform
+   * surface is translated by a `VideoOutputNodeFactory`; an Android window, a Win32 `HWND` and an
+   * Apple `IOSurface` all arrive here.
    *
    * @param surface the output surface.
    */

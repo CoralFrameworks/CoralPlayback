@@ -74,6 +74,7 @@ if (APPLE)
       effect
       graphics
       "-framework Cocoa"
+      "-framework IOSurface"
       "-framework QuartzCore")
   target_compile_definitions(video_player_demo PRIVATE CORAL_ASSETS_DIR="${CORAL_TEST_DATA_DIR}")
   target_compile_options(video_player_demo PRIVATE -fobjc-arc -Wall -Wextra -Wno-unused-parameter)
