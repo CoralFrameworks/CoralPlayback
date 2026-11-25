@@ -606,6 +606,13 @@ DecodeVideoRenderer::createDecoder(const std::shared_ptr<MediaFormat>& inputForm
   if (decoder != nullptr) {
     decoder->configure(decoderFormat, decoderSurface);
     decoder->start();
+    // A container may omit its colour metadata while the decoder's codec configuration carries it.
+    // Report the output format's colour after configuration so the player does not stay on the empty
+    // input format; the frame sink sees the same colour on each decoded frame.
+    if (videoColorInfoListener != nullptr && decoder->getOutputFormat() != nullptr) {
+      videoColorInfoListener->onVideoColorInfoChanged(
+          VideoColorInfo::fromMediaColorInfo(decoder->getOutputFormat()->getColorInfo()));
+    }
   }
 
   return decoder;
