@@ -79,6 +79,13 @@ bool Win32VideoFrameSource::refresh(const VideoFrameOutput& output, std::string&
     return false;
   }
   if (mTextures[index].valid()) {
+    // A cached slot must also become the image the caller draws; otherwise switching back to an
+    // earlier ring slot leaves the ExternalImage pointing at the previous slot.
+    mImage.texture = mTextures[index];
+    mImage.width = node->width();
+    mImage.height = node->height();
+    mImage.format = backend::PixelFormat::B8G8R8A8_UNORM;
+    mImage.premultiplied = false;
     mTextureIndex = index;
     return true;
   }
