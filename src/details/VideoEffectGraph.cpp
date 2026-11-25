@@ -381,4 +381,26 @@ EffectResult VideoEffectGraph::setScaleMode(const EffectScaleMode mode) {
   return mLayout->setScaleMode(mode);
 }
 
+EffectResult VideoEffectGraph::setVideoRotation(const int degrees) {
+  if (mLayout == nullptr) {
+    return EffectResult::NotAttached;
+  }
+  EffectRotation rotation = EffectRotation::None;
+  if (degrees == 90) {
+    rotation = EffectRotation::Clockwise90;
+  } else if (degrees == 180) {
+    rotation = EffectRotation::Clockwise180;
+  } else if (degrees == 270) {
+    rotation = EffectRotation::Clockwise270;
+  }
+  return mLayout->setRotation(rotation);
+}
+
+EffectResult VideoEffectGraph::setVideoMirror(const bool horizontal, const bool vertical) {
+  if (mLayout == nullptr) {
+    return EffectResult::NotAttached;
+  }
+  return mLayout->setMirror(horizontal, vertical);
+}
+
 } // namespace coral

@@ -135,6 +135,8 @@ public:
 
   [[nodiscard]] VideoScaleMode getVideoScaleMode() const override;
 
+  void setVideoMirror(bool horizontal, bool vertical) override;
+
   void setTextOutput(const std::shared_ptr<TextOutput>& output) override;
 
   [[nodiscard]] Tracks getCurrentTracks() const override;

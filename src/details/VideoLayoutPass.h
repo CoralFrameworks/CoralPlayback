@@ -62,6 +62,12 @@ public:
   /** Sets the mapping from source to target; defaults to `Fit`. */
   EffectResult setScaleMode(EffectScaleMode mode);
 
+  /** Rotates the image clockwise before it is fitted into the target. */
+  EffectResult setRotation(EffectRotation rotation);
+
+  /** Mirrors the image in the target; applied after rotation. */
+  EffectResult setMirror(bool horizontal, bool vertical);
+
   /** Sets the colour written outside a `Fit` image; defaults to opaque black. */
   EffectResult setLetterboxColor(const EffectColor& color);
 
@@ -72,6 +78,9 @@ private:
 
   std::shared_ptr<EffectPassNode> mPass;
   EffectScaleMode mScaleMode = EffectScaleMode::Fit;
+  EffectRotation mRotation = EffectRotation::None;
+  bool mMirrorHorizontal = false;
+  bool mMirrorVertical = false;
 };
 
 } // namespace coral

@@ -198,6 +198,17 @@ public:
   }
 
   /**
+   * Mirrors the video after rotation and fitting.
+   *
+   * <p>The default implementation ignores it; a platform that renders through an effect graph
+   * applies it in the layout pass.
+   */
+  virtual void setVideoMirror(bool horizontal, bool vertical) {
+    static_cast<void>(horizontal);
+    static_cast<void>(vertical);
+  }
+
+  /**
    * Sets the receiver of the cues that the player renders, or clears it with null.
    *
    * <p>The counterpart of ExoPlayer's {@code Player.setTextOutput}. The cues are delivered on the

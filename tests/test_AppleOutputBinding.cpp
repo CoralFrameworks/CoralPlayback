@@ -747,6 +747,8 @@ TEST(AppleLivePlayerEffectTest, SamplesTheDecodersSurfaceThroughTheAppleSink) {
   player->setVideoScaleMode(coral::Player::VideoScaleMode::Stretch);
   EXPECT_EQ(player->getVideoScaleMode(), coral::Player::VideoScaleMode::Stretch);
   player->setVideoScaleMode(coral::Player::VideoScaleMode::Fit);
+  player->setVideoMirror(true, false);
+  player->setVideoMirror(false, false);
   if (engine->backend() == EffectBackend::Metal) {
     EXPECT_TRUE(waitFor([&] { return effectInput.frameSink->isZeroCopy(); }, 10s))
         << "the Apple input should sample the decoder's IOSurface in place: "

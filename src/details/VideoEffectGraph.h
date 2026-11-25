@@ -112,6 +112,12 @@ public:
 
   EffectResult setScaleMode(EffectScaleMode mode);
 
+  /** Rotates the video clockwise before it is fitted into the output. */
+  EffectResult setVideoRotation(int degrees);
+
+  /** Mirrors the fitted video. */
+  EffectResult setVideoMirror(bool horizontal, bool vertical);
+
   [[nodiscard]] const std::shared_ptr<EffectEngine>& engine() const noexcept { return mEngine; }
 
   [[nodiscard]] const std::shared_ptr<EffectInputNode>& input() const noexcept { return mInput; }

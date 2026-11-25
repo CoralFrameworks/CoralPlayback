@@ -476,6 +476,20 @@ void AvLivePlayer::setVideoScaleMode(const VideoScaleMode mode) {
     WrapMessageData(platformMode)));
 }
 
+void AvLivePlayer::setVideoMirror(const bool horizontal, const bool vertical) {
+  const int flags = (horizontal ? 1 : 0) | (vertical ? 2 : 0);
+  msgHandler->sendMessage(Message::obtain(msgHandler, MSG_SET_VIDEO_MIRROR, flags, 0));
+}
+
+void AvLivePlayer::setVideoMirrorInternal(const int flags) {
+  if (videoEffectGraph == nullptr) {
+    return;
+  }
+  if (videoEffectGraph->setVideoMirror((flags & 1) != 0, (flags & 2) != 0) != EffectResult::Success) {
+    MINILOG_WARN("could not set the effect mirror mode");
+  }
+}
+
 void AvLivePlayer::setMediaItem(const std::shared_ptr<MediaItem>& mediaItem) {
   // The source is created by the factory, which is what lets an application choose how the media is
   // read without the player having to know about the kinds of media it supports.
@@ -926,6 +940,10 @@ bool AvLivePlayer::handleMessage(Message* msg) {
     }
     case MSG_TRACK_SELECTION_INVALIDATED: {
       reselectTracksInternal();
+      break;
+    }
+    case MSG_SET_VIDEO_MIRROR: {
+      setVideoMirrorInternal(msg->arg1);
       break;
     }
     case MSG_SELECT_TRACK: {

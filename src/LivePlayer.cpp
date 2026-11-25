@@ -157,6 +157,10 @@ LivePlayer::VideoScaleMode LivePlayer::getVideoScaleMode() const {
   return mImpl->getVideoScaleMode();
 }
 
+void LivePlayer::setVideoMirror(const bool horizontal, const bool vertical) {
+  mImpl->setVideoMirror(horizontal, vertical);
+}
+
 void LivePlayer::setTextOutput(const std::shared_ptr<TextOutput>& output) {
   mImpl->setTextOutput(output);
 }

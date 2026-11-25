@@ -112,6 +112,8 @@ public:
     return videoScaleMode.load(std::memory_order_relaxed);
   }
 
+  void setVideoMirror(bool horizontal, bool vertical) override;
+
   void setTextOutput(const std::shared_ptr<TextOutput>& output) override;
 
   [[nodiscard]] Tracks getCurrentTracks() const override;
@@ -403,6 +405,8 @@ private:
   void applyVideoEffectSurface(const std::shared_ptr<VideoSurface>& surface);
 
   void setVideoScalingModeInternal(const Message* msg);
+
+  void setVideoMirrorInternal(int flags);
 
   struct TrackSelectionRequest {
     int rendererIndex = 0;
@@ -760,6 +764,7 @@ private:
   static constexpr int MSG_PLAY = 27;
   static constexpr int MSG_SELECT_TRACK = 28;
   static constexpr int MSG_CLEAR_TRACK_SELECTION = 29;
+  static constexpr int MSG_SET_VIDEO_MIRROR = 30;
 
   static constexpr int64_t ACTIVE_INTERVAL_MS = 10;
   static constexpr int64_t IDLE_INTERVAL_MS = 1000;

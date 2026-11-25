@@ -297,6 +297,11 @@ void DecodeVideoRenderer::onInputFormatChanged(FormatHolder& formatHolder) {
   mWaitingForFirstSampleInFormat = true;
   auto oldFormat = std::move(mInputFormat);
   mInputFormat = formatHolder.format;
+  if (mVideoEffectGraph != nullptr) {
+    // The extractor reports the display rotation; applying it to the layout keeps a portrait clip
+    // upright even when its coded dimensions are landscape.
+    mVideoEffectGraph->setVideoRotation(mInputFormat->getRotation());
+  }
   if (mFrameSink != nullptr) {
     mFrameSink->setInputFormat(mInputFormat);
   }
