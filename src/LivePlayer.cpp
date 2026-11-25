@@ -205,6 +205,10 @@ void LivePlayer::prefetchThumbnails(const int64_t startUs, const int64_t endUs,
   mImpl->prefetchThumbnails(startUs, endUs, stepUs);
 }
 
+void LivePlayer::cancelThumbnailPrefetch() {
+  mImpl->cancelThumbnailPrefetch();
+}
+
 void LivePlayer::setPreferredAudioLanguage(const std::string& language) {
   mImpl->setPreferredAudioLanguage(language);
 }

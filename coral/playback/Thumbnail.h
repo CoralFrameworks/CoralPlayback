@@ -63,6 +63,10 @@ public:
     static_cast<void>(positionUs);
   }
 
+  /** Drops queued prefetches while leaving user requests and the in-flight request alone. */
+  virtual void cancelPrefetch() {
+  }
+
   /** Cancels outstanding requests; called when the player is released. */
   virtual void cancel() {}
 };

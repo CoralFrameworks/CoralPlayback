@@ -231,5 +231,23 @@ TEST(ThumbnailCacheTest, DoesNotDropUserRequestsBehindPrefetches) {
   EXPECT_GE(source->requests(), 3);
 }
 
+TEST(ThumbnailCacheTest, CancelPrefetchDropsQueuedWorkButNotUserRequests) {
+  auto source = std::make_shared<LatestOnlyThumbnailProvider>();
+  auto cache = CachingThumbnailProvider::create(
+    source, ThumbnailCacheConfig{.prefetchBefore = 0, .prefetchAfter = 0});
+  ASSERT_NE(cache, nullptr);
+  cache->prefetch(5'000'000);
+  cache->prefetch(7'000'000);
+  cache->prefetch(8'000'000);
+  EXPECT_EQ(source->requests(), 1) << "only the in-flight prefetch should reach the provider";
+  cache->cancelPrefetch();
+  source->completeLast();
+  int delivered = 0;
+  cache->requestThumbnail(6'000'000, [&](Thumbnail) { ++delivered; });
+  source->completeLast();
+  EXPECT_EQ(delivered, 1);
+  EXPECT_EQ(source->requests(), 2) << "queued prefetches must not run after cancelPrefetch";
+}
+
 } // namespace
 } // namespace coral

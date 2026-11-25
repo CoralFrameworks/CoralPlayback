@@ -296,6 +296,9 @@ public:
     static_cast<void>(stepUs);
   }
 
+  /** Drops queued thumbnail prefetches, e.g. after the seek bar moved to another range. */
+  virtual void cancelThumbnailPrefetch() {}
+
   /**
    * Sets the preferred audio language as an IETF BCP 47 tag.
    *

@@ -88,6 +88,8 @@ public:
    */
   void prefetch(int64_t positionUs) override;
 
+  void cancelPrefetch() override;
+
   void cancel() override;
 
   [[nodiscard]] ThumbnailCacheStats stats() const;

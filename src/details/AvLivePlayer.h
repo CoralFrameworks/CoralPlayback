@@ -135,6 +135,8 @@ public:
 
   void prefetchThumbnails(int64_t startUs, int64_t endUs, int64_t stepUs) override;
 
+  void cancelThumbnailPrefetch() override;
+
   void setPreferredAudioLanguage(const std::string& language) override;
 
   [[nodiscard]] std::string getPreferredAudioLanguage() const override;

@@ -161,9 +161,7 @@ struct CachingThumbnailProvider::Impl : public std::enable_shared_from_this<Cach
     if (callback) {
       waiting.callbacks.push_back(std::move(callback));
     }
-    if (!prefetch) {
-      waiting.prefetch = false;
-    }
+    waiting.prefetch = prefetch;
     // User requests go ahead of every queued prefetch. A bucket that is already in flight stays
     // where it is; its result will be shared with the new callback.
     if (sourceBusyBucket != bucket) {
@@ -273,6 +271,24 @@ void CachingThumbnailProvider::requestThumbnail(const int64_t positionUs, Callba
 
 void CachingThumbnailProvider::prefetch(const int64_t positionUs) {
   mImpl->requestInternal(positionUs, nullptr, true, true);
+}
+
+void CachingThumbnailProvider::cancelPrefetch() {
+  {
+    const std::lock_guard<std::mutex> lock(mImpl->mutex);
+    std::deque<int64_t> kept;
+    for (const int64_t bucket : mImpl->queue) {
+      const auto waiting = mImpl->pending.find(bucket);
+      if (waiting != mImpl->pending.end() && waiting->second.prefetch &&
+          bucket != mImpl->sourceBusyBucket) {
+        mImpl->pending.erase(waiting);
+      } else {
+        kept.push_back(bucket);
+      }
+    }
+    mImpl->queue = std::move(kept);
+  }
+  mImpl->startNext();
 }
 
 void CachingThumbnailProvider::cancel() {
