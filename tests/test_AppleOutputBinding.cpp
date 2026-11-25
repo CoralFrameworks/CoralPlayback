@@ -42,6 +42,7 @@
 #include <IOSurface/IOSurface.h>
 
 #include <cstdlib>
+#include <filesystem>
 
 #include <gtest/gtest.h>
 
@@ -630,9 +631,12 @@ TEST(AppleLivePlayerEffectTest, ReportsTheAudioTrackWhenAudioIsEnabled) {
 }
 
 TEST(AppleLivePlayerEffectTest, SwitchesBetweenTwoAudioTracks) {
-  const char* path = std::getenv("CORAL_MULTI_AUDIO");
-  if (path == nullptr) {
-    GTEST_SKIP() << "set CORAL_MULTI_AUDIO to a two-audio-track MP4 to run this test";
+  const char* overridePath = std::getenv("CORAL_MULTI_AUDIO");
+  const std::string path = overridePath != nullptr
+    ? overridePath
+    : std::string(CORAL_ASSETS_DIR) + "/video/multi_audio_5s.mp4";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the two-audio-track fixture is missing: " << path;
   }
   auto player = LivePlayer::create(path, LivePlayer::Configuration{.audioEnabled = true});
   ASSERT_NE(player, nullptr);
