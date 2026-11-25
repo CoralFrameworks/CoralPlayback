@@ -241,6 +241,10 @@ void CachingThumbnailProvider::requestThumbnail(const int64_t positionUs, Callba
   mImpl->requestInternal(positionUs, std::move(callback), false, true);
 }
 
+void CachingThumbnailProvider::prefetch(const int64_t positionUs) {
+  mImpl->requestInternal(positionUs, nullptr, true, true);
+}
+
 void CachingThumbnailProvider::cancel() {
   {
     const std::lock_guard<std::mutex> lock(mImpl->mutex);

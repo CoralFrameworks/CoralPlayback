@@ -82,6 +82,12 @@ public:
 
   void requestThumbnail(int64_t positionUs, Callback callback) override;
 
+  /**
+   * Warms the bucket containing @p positionUs and its configured neighbours without a user
+   * callback. A later request for the same bucket is served from the cache.
+   */
+  void prefetch(int64_t positionUs);
+
   void cancel() override;
 
   [[nodiscard]] ThumbnailCacheStats stats() const;

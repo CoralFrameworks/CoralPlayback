@@ -153,5 +153,21 @@ TEST(ThumbnailCacheTest, EvictsLeastRecentlyUsed) {
   EXPECT_GT(source->requests(), before) << "the least recently used bucket should have been evicted";
 }
 
+TEST(ThumbnailCacheTest, PrefetchWarmsTheCacheWithoutACallback) {
+  auto source = std::make_shared<FakeThumbnailProvider>();
+  ThumbnailCacheConfig config;
+  config.prefetchBefore = 0;
+  config.prefetchAfter = 0;
+  auto cache = CachingThumbnailProvider::create(source, config);
+  ASSERT_NE(cache, nullptr);
+  cache->prefetch(2'000'000);
+  EXPECT_GE(source->requests(), 1);
+  const int before = source->requests();
+  int delivered = 0;
+  cache->requestThumbnail(2'100'000, [&](Thumbnail) { ++delivered; });
+  EXPECT_EQ(delivered, 1);
+  EXPECT_EQ(source->requests(), before) << "the prefetched bucket should be served from cache";
+}
+
 } // namespace
 } // namespace coral
