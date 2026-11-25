@@ -90,6 +90,11 @@ public:
     mVideoSizeSeen.store(true, std::memory_order_release);
   }
 
+  void onVideoColorInfoChanged(const coral::VideoColorInfo& colorInfo) override {
+    static_cast<void>(colorInfo);
+    mVideoColorSeen.store(true, std::memory_order_release);
+  }
+
   void onTracksChanged(const coral::Tracks& tracks) override {
     static_cast<void>(tracks);
     mTracksSeen.store(true, std::memory_order_release);
@@ -112,6 +117,9 @@ public:
   [[nodiscard]] int tracksChangedCount() const {
     return mTracksChangedCount.load(std::memory_order_acquire);
   }
+  [[nodiscard]] bool videoColorSeen() const {
+    return mVideoColorSeen.load(std::memory_order_acquire);
+  }
   [[nodiscard]] bool failed() const { return mFailed.load(std::memory_order_acquire); }
   [[nodiscard]] std::string error() const {
     std::lock_guard<std::mutex> lock(mMutex);
@@ -123,6 +131,7 @@ private:
   std::atomic<bool> mVideoSizeSeen{false};
   std::atomic<bool> mTracksSeen{false};
   std::atomic<int> mTracksChangedCount{0};
+  std::atomic<bool> mVideoColorSeen{false};
   std::atomic<bool> mFailed{false};
   mutable std::mutex mMutex;
   std::string mError;
@@ -841,6 +850,16 @@ TEST(AppleLivePlayerEffectTest, SamplesTheDecodersSurfaceThroughTheAppleSink) {
       << appleSink->convertedFrameCount();
   EXPECT_EQ(appleSink->convertedFrameCount(), 0u)
       << "the conversion ring is a fallback and should not run for a BGRA decoder";
+  EXPECT_TRUE(waitFor([&] { return probe->videoColorSeen(); }, 10s))
+      << "the player never reported its video colour info";
+  const auto colorInfo = player->getVideoColorInfo();
+  const auto frameOutput = player->getVideoFrameOutput();
+  EXPECT_EQ(colorInfo.primaries, coral::VideoColorPrimaries::BT709);
+  EXPECT_EQ(colorInfo.transfer, coral::VideoColorTransfer::SDR);
+  EXPECT_EQ(colorInfo.matrix, coral::VideoColorMatrix::BT709);
+  EXPECT_EQ(colorInfo.range, coral::VideoColorRange::Limited);
+  EXPECT_FALSE(colorInfo.isHdr());
+  EXPECT_EQ(frameOutput.colorInfo.primaries, colorInfo.primaries);
   EXPECT_TRUE(waitFor([&] { return probe->tracksSeen(); }, 10s))
       << "the player never reported its tracks";
   const auto tracks = player->getCurrentTracks();
@@ -857,7 +876,6 @@ TEST(AppleLivePlayerEffectTest, SamplesTheDecodersSurfaceThroughTheAppleSink) {
   }
   EXPECT_TRUE(hasVideo);
   EXPECT_TRUE(hasSelected);
-  const auto frameOutput = player->getVideoFrameOutput();
   EXPECT_NE(frameOutput.surface, nullptr);
   EXPECT_GT(frameOutput.sequence, 0u);
   EXPECT_GE(frameOutput.positionUs, 0);

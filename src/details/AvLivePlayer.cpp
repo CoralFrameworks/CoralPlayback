@@ -137,6 +137,9 @@ AvLivePlayer::AvLivePlayer(const std::vector<std::shared_ptr<Renderer>>& rendere
   // the same reason as `callbackRef`: the player belongs to its caller.
   videoSizeListenerRef = std::shared_ptr<VideoSizeListener>(this, [](VideoSizeListener*) {
   });
+  videoColorInfoListenerRef = std::shared_ptr<VideoColorInfoListener>(this,
+    [](VideoColorInfoListener*) {
+    });
 
   // The events the application listens to are delivered on the thread it created the player on,
   // which is where ExoPlayer's listener handler lives too. A thread without a looper, e.g. a test
@@ -850,6 +853,23 @@ void AvLivePlayer::onVideoSizeChanged(const int width, const int height) {
   }
 }
 
+void AvLivePlayer::onVideoColorInfoChanged(const VideoColorInfo& colorInfo) {
+  if (msgHandler != nullptr) {
+    msgHandler->sendMessage(Message::obtain(msgHandler, MSG_VIDEO_COLOR_INFO_CHANGED,
+      WrapMessageData(colorInfo)));
+  }
+}
+
+void AvLivePlayer::setVideoColorInfoInternal(const VideoColorInfo& colorInfo) {
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    videoColorInfo = colorInfo;
+  }
+  dispatchPlayerEvent([colorInfo](EventListener& listener) {
+    listener.onVideoColorInfoChanged(colorInfo);
+  });
+}
+
 void AvLivePlayer::setVideoSizeInternal(const int width, const int height) {
   if (mVideoWidth == width && mVideoHeight == height) {
     return;
@@ -946,6 +966,10 @@ bool AvLivePlayer::handleMessage(Message* msg) {
     }
     case MSG_TRACK_SELECTION_INVALIDATED: {
       reselectTracksInternal();
+      break;
+    }
+    case MSG_VIDEO_COLOR_INFO_CHANGED: {
+      setVideoColorInfoInternal(UseMessageData<VideoColorInfo>(msg->msgData));
       break;
     }
     case MSG_SET_VIDEO_MIRROR: {
@@ -1552,12 +1576,18 @@ VideoFrameOutput AvLivePlayer::getVideoFrameOutput() const {
   return videoFrameOutput;
 }
 
+VideoColorInfo AvLivePlayer::getVideoColorInfo() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return videoColorInfo;
+}
+
 void AvLivePlayer::onVideoFrameRendered(std::shared_ptr<Fence> fence) {
   const auto positionUs = pendingVideoFramePositionUs.load(std::memory_order_relaxed);
   const std::lock_guard<Mutex> lock(outputLock);
   videoFrameOutput.surface = pendingOutputSurface;
   videoFrameOutput.positionUs = positionUs;
   videoFrameOutput.fence = std::move(fence);
+  videoFrameOutput.colorInfo = videoColorInfo;
   ++videoFrameOutput.sequence;
 }
 
@@ -2359,6 +2389,7 @@ void AvLivePlayer::enableRenderer(const size_t rendererIndex, const bool wasRend
   // The size of the video is read from the renderer, which reports it as soon as it decodes a frame
   // and remembers the last one it reported.
   renderer->setVideoSizeListener(videoSizeListenerRef);
+  renderer->setVideoColorInfoListener(videoColorInfoListenerRef);
   // Update the media clock enabled renderer
   mediaClock->onRendererEnabled(renderer);
   // Start the renderer if playing.

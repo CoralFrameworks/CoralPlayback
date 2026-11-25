@@ -302,6 +302,10 @@ void DecodeVideoRenderer::onInputFormatChanged(FormatHolder& formatHolder) {
     // upright even when its coded dimensions are landscape.
     mVideoEffectGraph->setVideoRotation(mInputFormat->getRotation());
   }
+  if (videoColorInfoListener != nullptr) {
+    videoColorInfoListener->onVideoColorInfoChanged(
+        VideoColorInfo::fromMediaColorInfo(mInputFormat->getColorInfo()));
+  }
   if (mFrameSink != nullptr) {
     mFrameSink->setInputFormat(mInputFormat);
   }
@@ -861,6 +865,15 @@ void DecodeVideoRenderer::setVideoSizeListener(const std::shared_ptr<VideoSizeLi
   // already known.
   if (listener != nullptr) {
     maybeRenotifyVideoSizeChanged();
+  }
+}
+
+void DecodeVideoRenderer::setVideoColorInfoListener(
+    const std::shared_ptr<VideoColorInfoListener>& listener) {
+  videoColorInfoListener = listener;
+  if (listener != nullptr && mInputFormat != nullptr) {
+    listener->onVideoColorInfoChanged(
+        VideoColorInfo::fromMediaColorInfo(mInputFormat->getColorInfo()));
   }
 }
 

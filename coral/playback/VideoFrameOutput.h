@@ -19,6 +19,8 @@
 
 #include <codec/MediaCodec.h>
 
+#include <coral/playback/VideoColorInfo.h>
+
 #include <effect/Fence.h>
 
 #include <cstdint>
@@ -54,6 +56,9 @@ struct VideoFrameOutput {
    * A bridge waits on it before sampling the surface.
    */
   std::shared_ptr<Fence> fence;
+
+  /** The colour description of the frame's video, or defaults when the container carried none. */
+  VideoColorInfo colorInfo;
 };
 
 } // namespace coral

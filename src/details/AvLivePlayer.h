@@ -57,6 +57,7 @@ struct VideoEffectInput;
 
 class AvLivePlayer final : public Player,
                            public DefaultMediaClock::PlaybackParametersListener,
+                           public Renderer::VideoColorInfoListener,
                            public MediaPeriod::Callback,
                            public MediaPeriodHolder::Factory,
                            public MediaSourceListInfoRefreshListener,
@@ -119,6 +120,8 @@ public:
   [[nodiscard]] Tracks getCurrentTracks() const override;
 
   [[nodiscard]] VideoFrameOutput getVideoFrameOutput() const override;
+
+  [[nodiscard]] VideoColorInfo getVideoColorInfo() const override;
 
   void selectTrack(int rendererIndex, int groupIndex, int trackIndex) override;
 
@@ -290,6 +293,8 @@ public:
    */
   void onVideoSizeChanged(int width, int height) override;
 
+  void onVideoColorInfoChanged(const VideoColorInfo& colorInfo) override;
+
   void onPlaybackParametersChanged(const Parameters& newParameters) override;
 
   void onPlaylistUpdateRequested() override;
@@ -412,6 +417,8 @@ private:
   void setVideoScalingModeInternal(const Message* msg);
 
   void setVideoMirrorInternal(int flags);
+
+  void setVideoColorInfoInternal(const VideoColorInfo& colorInfo);
 
   struct TrackSelectionRequest {
     int rendererIndex = 0;
@@ -679,6 +686,8 @@ private:
   /** The last cue group delivered, so the effect pipeline can be enabled after it. */
   AVCueGroup currentCueGroup;
   VideoFrameOutput videoFrameOutput;
+  VideoColorInfo videoColorInfo;
+  std::shared_ptr<Renderer::VideoColorInfoListener> videoColorInfoListenerRef;
   std::atomic<int64_t> pendingVideoFramePositionUs { 0 };
   std::atomic<SubtitleRenderMode> subtitleRenderMode{ SubtitleRenderMode::kAuto };
   std::atomic<VideoScaleMode> videoScaleMode{ VideoScaleMode::Fit };
@@ -772,6 +781,7 @@ private:
   static constexpr int MSG_SELECT_TRACK = 28;
   static constexpr int MSG_CLEAR_TRACK_SELECTION = 29;
   static constexpr int MSG_SET_VIDEO_MIRROR = 30;
+  static constexpr int MSG_VIDEO_COLOR_INFO_CHANGED = 31;
 
   static constexpr int64_t ACTIVE_INTERVAL_MS = 10;
   static constexpr int64_t IDLE_INTERVAL_MS = 1000;

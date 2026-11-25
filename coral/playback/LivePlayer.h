@@ -143,6 +143,8 @@ public:
 
   [[nodiscard]] VideoFrameOutput getVideoFrameOutput() const override;
 
+  [[nodiscard]] VideoColorInfo getVideoColorInfo() const override;
+
   void selectTrack(int rendererIndex, int groupIndex, int trackIndex) override;
 
   void clearTrackSelection(int rendererIndex) override;

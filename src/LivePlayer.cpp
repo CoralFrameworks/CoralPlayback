@@ -173,6 +173,10 @@ VideoFrameOutput LivePlayer::getVideoFrameOutput() const {
   return mImpl->getVideoFrameOutput();
 }
 
+VideoColorInfo LivePlayer::getVideoColorInfo() const {
+  return mImpl->getVideoColorInfo();
+}
+
 void LivePlayer::selectTrack(int rendererIndex, int groupIndex, int trackIndex) {
   mImpl->selectTrack(rendererIndex, groupIndex, trackIndex);
 }

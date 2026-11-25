@@ -118,6 +118,9 @@ public:
     /** Called when the size of the video changed. */
     virtual void onVideoSizeChanged(int width, int height) {}
 
+    /** Called when the colour description of the video changed. */
+    virtual void onVideoColorInfoChanged(const VideoColorInfo& colorInfo) {}
+
     /**
      * Called when the available tracks or their selection changed.
      *
@@ -240,6 +243,11 @@ public:
    * pipeline.
    */
   [[nodiscard]] virtual VideoFrameOutput getVideoFrameOutput() const {
+    return {};
+  }
+
+  /** Returns the colour description of the current video, or defaults when unknown. */
+  [[nodiscard]] virtual VideoColorInfo getVideoColorInfo() const {
     return {};
   }
 

@@ -306,6 +306,7 @@ set(PUBLIC_HDRS
     coral/playback/TextOutput.h
     coral/playback/TimedFormatQueue.h
     coral/playback/Tracks.h
+    coral/playback/VideoColorInfo.h
     coral/playback/VideoFrameOutput.h
     coral/playback/VideoFrameSink.h
     coral/playback/VideoOutput.h
@@ -488,6 +489,7 @@ set(SRCS
     src/util/SystemLanguage.cpp
     # src
     src/DefaultMediaClock.cpp
+    src/details/VideoColorInfo.cpp
     src/LivePlayer.cpp
     src/ostream.cpp
     src/TimedFormatQueue.cpp

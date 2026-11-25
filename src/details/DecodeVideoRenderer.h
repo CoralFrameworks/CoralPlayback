@@ -76,6 +76,9 @@ public:
    */
   void setVideoSizeListener(const std::shared_ptr<VideoSizeListener>& listener) override;
 
+  void setVideoColorInfoListener(
+      const std::shared_ptr<VideoColorInfoListener>& listener) override;
+
   void render(int64_t positionUs, int64_t elapsedRealtimeUs) override;
 
   bool isReady() override;
@@ -403,6 +406,9 @@ private:
 
   /** The listener the size of the decoded frames is reported to, or null. */
   std::shared_ptr<VideoSizeListener> videoSizeListener;
+
+  /** The listener the colour metadata is reported to, or null. */
+  std::shared_ptr<VideoColorInfoListener> videoColorInfoListener;
 
   int64_t mDroppedFrameAccumulationStartTimeMs;
   int mDroppedFrames;
