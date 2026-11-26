@@ -616,6 +616,11 @@ MediaLoadData ProgressiveMediaPeriod::createMediaLoadData(const int64_t mediaSta
 }
 
 void ProgressiveMediaPeriod::startLoading() {
+  if (loader->isLoading()) {
+    // A canceled load is still winding down: it can still append the samples of the old position.
+    // The cancel callback asks for the restart, which applies the pending reset without racing it.
+    return;
+  }
   if (extractor == nullptr) {
     // The source could not create an extractor for the media, so no period can ever be prepared.
     reportFatalError("No progressive extractor is available for " + inputUrl);
@@ -638,6 +643,15 @@ void ProgressiveMediaPeriod::startLoading() {
       return;
     }
     loadable->setLoadPosition(pendingResetPositionUs);
+    if (pendingResetPositionUs != Definitions::kTimeUnset) {
+      // A canceled load may have queued samples from the old position after the seek was requested.
+      // They are not part of the restarted load, and leaving them in front of the target would make
+      // the first sample of the new position look like it came from the old one.
+      for (size_t index = 0; index < sampleQueues.size(); ++index) {
+        sampleQueues[index]->discardTo(pendingResetPositionUs, /* toKeyframe= */ false,
+          trackState.trackEnabledStates[index]);
+      }
+    }
     for (const auto& sampleQueue : sampleQueues) {
       sampleQueue->setStartTimeUs(pendingResetPositionUs);
       // The load restarts at the keyframe before the target, so the samples that follow are the
@@ -727,8 +741,14 @@ void ProgressiveMediaPeriod::onLoadCanceled(ExtractingLoadable* canceledLoadable
         createMediaLoadData(lastSeekPositionUs));
   }
   if (!releasedByLoader) {
-    for (const auto& sampleQueue : sampleQueues) {
-      sampleQueue->reset();
+    // The restarted load may already have applied the pending reset (and cleared it). Resetting the
+    // queues now would drop the start time of the new position and let the samples of the old one
+    // through unfiltered, so only the queues of a reset that is still pending are cleared here.
+    if (isPendingReset()) {
+      for (const auto& sampleQueue : sampleQueues) {
+        sampleQueue->reset();
+      }
+
     }
     if (!released && enabledTrackCount > 0 && mediaCallback != nullptr) {
       mediaCallback->onContinueLoadingRequested(shared_from_this());
