@@ -18,6 +18,7 @@
 
 #include <extractor/text/DefaultSubtitleParserFactory.h>
 
+#include <media/Format.h>
 #include <media/PacketBuffer.h>
 
 #include <minilog/log.h>
@@ -137,7 +138,11 @@ bool TextRenderer::isReady() {
 }
 
 bool TextRenderer::isEnded() {
-  return mOutputEnded;
+  // A text track has no timed output to drain: once its stream is final and it has read to the end,
+  // it is ended even if no further render call arrives to flip `mOutputEnded`. Without this the
+  // player's `renderersEnded` never becomes true when a text track is enabled, so playback never
+  // reaches STATE_ENDED (and repeat/loop cannot work).
+  return mOutputEnded || (hasReadStreamToEnd() && isCurrentStreamFinal());
 }
 
 void TextRenderer::handleMessage(int type, const Message* msg) {
@@ -152,13 +157,16 @@ void TextRenderer::flushPending(const int64_t endUs) {
   const auto behavior = mFormat != nullptr ? mFormat->getCueReplacementBehavior()
                                            : CueReplacementBehavior::kMerge;
   const int64_t offsetUs = mFormat != nullptr ? mFormat->getSubsampleOffsetUs() : 0;
+  // The end a sample states for its own cues wins over the one the caller inferred from the next
+  // sample: a gap between two cues would otherwise stretch the first one over that gap.
+  const int64_t effectiveEndUs = mPendingEndUs != Definitions::kTimeUnset ? mPendingEndUs : endUs;
 
   for (const auto& result : mPendingResults) {
-
-    mTimeline->add(result, mPendingStartUs, endUs, behavior, offsetUs);
+    mTimeline->add(result, mPendingStartUs, effectiveEndUs, behavior, offsetUs);
   }
 
   mHasPending = false;
+  mPendingEndUs = Definitions::kTimeUnset;
   mPendingResults.clear();
 }
 
@@ -226,6 +234,48 @@ bool TextRenderer::readSamples() {
     mPendingStartUs = sampleStartUs;
     mPendingResults = std::move(results);
     mHasPending = true;
+
+    // A document that states the end of its cues (the SRT/ASS/WebVTT blocks the extractor
+    // synthesises, and the bitmap parsers) can go into the timeline now. Waiting for the next
+    // sample would delay the cue of the last sample until the end of the stream, and would replace
+    // the end the format states with the start of the next sample, which is later when two cues are
+    // separated by a gap.
+    int64_t statedEndUs = Definitions::kTimeUnset;
+    bool everyCueTimed = !mPendingResults.empty();
+    if (!mPendingResults.empty()) {
+      const int64_t durationUs = mPendingResults.front().durationUs;
+      if (durationUs != Definitions::kTimeUnset && durationUs > 0) {
+        // The document may state the start of its first cue; the end of the sample is measured from
+        // that start, the same base the timeline uses when it places the cue.
+        const int64_t offsetUs = mFormat != nullptr ? mFormat->getSubsampleOffsetUs() : 0;
+        const int64_t documentStartUs = mPendingResults.front().startTimeUs;
+        int64_t baseUs = sampleStartUs;
+        if (documentStartUs != Definitions::kTimeUnset) {
+          baseUs = offsetUs == MediaFormat::OFFSET_SAMPLE_RELATIVE
+                     ? sampleStartUs + documentStartUs
+                     : documentStartUs + offsetUs;
+        }
+        statedEndUs = baseUs + durationUs;
+      }
+      for (const auto& result : mPendingResults) {
+        if (result.durationUs != durationUs) {
+          statedEndUs = Definitions::kTimeUnset;
+        }
+        for (size_t cue = 0; cue < result.cues.size(); ++cue) {
+          const int64_t cueDurationUs =
+            cue < result.cueDurationsUs.size() ? result.cueDurationsUs[cue] : Definitions::kTimeUnset;
+          if (cueDurationUs == Definitions::kTimeUnset || cueDurationUs <= 0) {
+            everyCueTimed = false;
+          }
+        }
+      }
+    }
+    if (statedEndUs != Definitions::kTimeUnset) {
+      mPendingEndUs = statedEndUs;
+      flushPending(statedEndUs);
+    } else if (everyCueTimed) {
+      flushPending(Definitions::kTimeUnset);
+    }
   }
   if (!mInputEnded && hasReadStreamToEnd()) {
     // The stream ended: its last sample is complete, so the cues that wait for their end time are
@@ -254,7 +304,10 @@ void TextRenderer::render(const int64_t positionUs, const int64_t elapsedRealtim
 void TextRenderer::emitCues(const int64_t positionUs) {
   const auto group = mTimeline->cuesAt(positionUs);
 
-  if (mHasLastGroup && group == mLastGroup) {
+  // The presentation time of a group moves with the clock while its cues stay the same - the empty
+  // group between two cues is the common case - so compare the cues rather than the whole group.
+  // Re-delivering on every position tick would clear and re-set the burned-in subtitle constantly.
+  if (mHasLastGroup && group.getCues() == mLastGroup.getCues()) {
     return;
   }
   deliver(group);

@@ -398,8 +398,13 @@ if (WIN32 AND NOT ANDROID)
   list(APPEND PUBLIC_HDRS
       coral/playback/win32/Win32TextureSurface.h
       coral/playback/win32/Win32VideoFrameSource.h
+      coral/playback/win32/WindowsHardwareVideoSurface.h
       coral/playback/win32/WindowsThumbnailProvider.h
       coral/playback/win32/WindowsTextureOutputNodeFactory.h
+      coral/playback/win32/WindowsVideoDevice.h
+      coral/playback/win32/WindowsVideoFrameSink.h
+      coral/playback/win32/WindowsVideoInput.h
+      coral/playback/win32/WindowsVideoOutputNodeFactory.h
   )
 endif ()
 
@@ -511,9 +516,13 @@ if (WIN32 AND NOT ANDROID)
   list(APPEND SRCS
       src/platform/win32/Win32TextureSurface.cpp
       src/platform/win32/Win32VideoFrameSource.cpp
+      src/platform/win32/WindowsHardwareVideoSurface.cpp
       src/platform/win32/WindowsThumbnailProvider.cpp
       src/platform/win32/Win32WindowSurface.cpp
       src/platform/win32/WindowsTextureOutputNodeFactory.cpp
+      src/platform/win32/WindowsVideoDevice.cpp
+      src/platform/win32/WindowsVideoFrameSink.cpp
+      src/platform/win32/WindowsVideoInput.cpp
       src/platform/win32/WindowsVideoOutputNodeFactory.cpp
   )
 endif ()

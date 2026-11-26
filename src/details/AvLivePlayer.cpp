@@ -96,6 +96,17 @@ AvLivePlayer::AvLivePlayer(const std::vector<std::shared_ptr<Renderer>>& rendere
       textRenderer = std::move(text);
       // The renderer calls this from the playback thread, which is where its render is called.
       textRenderer->setCueListener([this](const AVCueGroup& group) {
+        // A side-loaded subtitle file replaces the cues of the embedded text track. Both sources
+        // dispatch through here, and the embedded track reports an empty group at every position it
+        // has no cue for; letting that through would clear the side-loaded cue between two of its
+        // own deliveries, so the burned-in subtitle flickers (or never makes it into a frame). The
+        // external timeline is dispatched by `doSomeWork` instead.
+        {
+          std::lock_guard<std::mutex> lock(externalMutex);
+          if (externalTimeline != nullptr) {
+            return;
+          }
+        }
         dispatchCueGroup(group);
       });
     } else if (auto metadata = std::dynamic_pointer_cast<MetadataRenderer>(renderers[i]);
@@ -1385,7 +1396,9 @@ void AvLivePlayer::doSomeWork() {
   }
   if (external != nullptr) {
     const AVCueGroup group = external->cuesAt(getCurrentPositionUs());
-    if (group != lastExternalGroup) {
+    // The presentation time of an empty group moves with the clock while the screen stays clear, so
+    // compare the cues: the graph only needs a new group when the pictures or texts change.
+    if (group.getCues() != lastExternalGroup.getCues()) {
       lastExternalGroup = group;
       dispatchCueGroup(group);
     }
@@ -1470,8 +1483,17 @@ void AvLivePlayer::doSomeWork() {
     setPlayWhenReadyInternal(false);
   }
   if (finishedRendering && playingPeriodHolder->info.isFinal) {
-    setState(State::STATE_ENDED);
-    stopRenderers();
+    // Ending playback is only correct when repetition is off: `REPEAT_MODE_ONE` starts the current
+    // item again and `REPEAT_MODE_ALL` advances to the next window, wrapping to the first.
+    if (repeatMode == RepeatMode::REPEAT_MODE_ONE) {
+      seekToInternal(Definitions::kTimeUnset);
+    } else if (repeatMode == RepeatMode::REPEAT_MODE_ALL &&
+               getNextMediaItemIndex() != Definitions::kIndexUnset) {
+      seekToWindowInternal(getNextMediaItemIndex(), Definitions::kTimeUnset);
+    } else {
+      setState(State::STATE_ENDED);
+      stopRenderers();
+    }
   } else if (playbackInfo.playbackState == State::STATE_BUFFERING &&
              shouldTransitionToReadyState(renderersAllowPlayback)) {
     setState(State::STATE_READY);

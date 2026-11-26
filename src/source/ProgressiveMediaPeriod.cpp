@@ -16,6 +16,8 @@
 
 #include <coral/source/ProgressiveMediaPeriod.h>
 
+#include <core/event/EventLooper.h>
+
 #include <minilog/log.h>
 #include <utils/Assert.h>
 
@@ -57,7 +59,11 @@ ProgressiveMediaPeriod::ProgressiveMediaPeriod(std::string url,
     : listener(listener),
       allocator(std::move(allocator)),
       continueLoadingCheckIntervalBytes(DEFAULT_LOADING_CHECK_INTERVAL_BYTES),
-      loader(std::make_unique<Loader>(nullptr, "Loader:ProgressiveMediaPeriod")),
+      // The callback looper is the looper of the thread that creates the period (the playback thread),
+      // not the looper of the first thread that calls startLoading. Fixing it here keeps the load
+      // results on the playback thread, where release() also runs, instead of delivering them inline
+      // on the loader thread where a release can race them.
+      loader(std::make_unique<Loader>(EventLooper::myLooper(), "Loader:ProgressiveMediaPeriod")),
       inputUrl(std::move(url)),
       dataSourceFactory(std::move(dataSourceFactory)),
       extractor(std::move(extractor)),
@@ -106,23 +112,19 @@ void ProgressiveMediaPeriod::release() {
   if (released) {
     return;
   }
+  // Mark the period as released and stop the loader first. `Loader::release` cancels the load and
+  // joins the loading thread, so once it returns no `AVTrackOutput` can append to a sample queue any
+  // more. Discarding the queues before that join is what used to run concurrent with the loading
+  // thread: `preRelease` frees the pages the extractor was writing into.
+  released = true;
+  loader->release(nullptr);
   if (prepared) {
-    // Discard as much as we can synchronously. We only do this if we're prepared, since otherwise
-    // the sample queues may still be written to by the loading thread.
-    for (const auto& sampleQueue : sampleQueues) {
+    // Discard as much as we can synchronously. The loading thread is gone, so this cannot race an
+    // append any more.
+    for (const auto& sampleQueue: sampleQueues) {
       sampleQueue->preRelease();
     }
   }
-  // Mark the period as released before stopping the load, so that the loading thread does not report
-  // any more continue-loading requests while it is being stopped, and so that a completion callback
-  // that is already queued on the callback looper does nothing when it arrives.
-  released = true;
-  // `Loader::release` cancels the load and joins the loading thread, so once it returns nothing can
-  // touch the sample queues, the extractor or the data source any more. Releasing them here rather
-  // than from a callback is what keeps a callback that is posted but never dispatched from holding
-  // the media of the period allocated: a completion callback that is still queued keeps this period
-  // alive through the loadable the loader owns, and it returns early because the period is released.
-  loader->release(nullptr);
   releaseResources();
   mediaCallback = nullptr;
 }
@@ -149,6 +151,10 @@ void ProgressiveMediaPeriod::releaseResources() {
   dataSource.reset();
   input.reset();
   loadable.reset();
+  // The period must not report anything else: the listener and the callback belong to the player
+  // side, which is what the period no longer reaches once it has been released.
+  listener = nullptr;
+  mediaCallback = nullptr;
   // The selections belong to the player, which owns them through the track selector result, so they
   // are only dropped here.
   trackSelections.clear();
@@ -467,7 +473,10 @@ void ProgressiveMediaPeriod::seekMap(std::shared_ptr<AVSeekMap> seekMap) {
       durationUs = imageDurationUs;
     }
     isLive = length == Definitions::kLengthUnset && durationUs == Definitions::kTimeUnset;
-    if (listener != nullptr) {
+    // The loader can extract the seek map while the player is releasing the media source graph; the
+    // listener would then be a destroyed source. The flag is set before the loader is stopped, so a
+    // seek map that arrives afterwards only updates this period's state.
+    if (listener != nullptr && !released) {
       listener->onSourceInfoRefreshed(durationUs, mSeekMap->isSeekable(), isLive);
     }
   }
@@ -557,11 +566,11 @@ void ProgressiveMediaPeriod::maybeFinishPrepare() {
   trackState.trackEnabledStates.assign(static_cast<size_t>(trackCount), false);
   trackState.trackNotifiedDownstreamFormats.assign(static_cast<size_t>(trackCount), false);
 
-  if (listener != nullptr) {
+  if (!released && listener != nullptr) {
     listener->onSourceInfoRefreshed(durationUs, isSeekable(), isLive);
   }
   prepared = true;
-  if (mediaCallback != nullptr) {
+  if (!released && mediaCallback != nullptr) {
     mediaCallback->onPrepared(shared_from_this());
   }
 }
@@ -693,7 +702,7 @@ void ProgressiveMediaPeriod::onLoadCompleted(ExtractingLoadable* completedLoadab
     // reference cycle between the period and its loadable.
     loadable.reset();
   }
-  if (mediaCallback != nullptr) {
+  if (!released && mediaCallback != nullptr) {
     mediaCallback->onContinueLoadingRequested(shared_from_this());
   }
 }
@@ -721,7 +730,7 @@ void ProgressiveMediaPeriod::onLoadCanceled(ExtractingLoadable* canceledLoadable
     for (const auto& sampleQueue : sampleQueues) {
       sampleQueue->reset();
     }
-    if (enabledTrackCount > 0 && mediaCallback != nullptr) {
+    if (!released && enabledTrackCount > 0 && mediaCallback != nullptr) {
       mediaCallback->onContinueLoadingRequested(shared_from_this());
     }
   }
@@ -933,7 +942,7 @@ void ProgressiveMediaPeriod::maybeStartDeferredRetry(const int track) {
   for (const auto& sampleQueue : sampleQueues) {
     sampleQueue->reset();
   }
-  if (mediaCallback != nullptr) {
+  if (!released && mediaCallback != nullptr) {
     mediaCallback->onContinueLoadingRequested(shared_from_this());
   }
 }

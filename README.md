@@ -26,7 +26,7 @@ src/selection/          the track-selection implementation
 src/upstream/           the loading implementation
 src/platform/           the platform bridges (Win32 window, Android surface, Apple IOSurface)
 tests/                  the unit suites
-examples/               the standalone Cocoa demo and its IOSurface output factory
+examples/               the standalone platform demos (Cocoa on macOS, Win32 on Windows)
 assets/                 the fixtures of the tests and the demo
 scripts/                the bootstrap tools that fetch the dependency repositories
 ```
@@ -198,6 +198,52 @@ Darwin sources of CoralCore, CoralMedia and CoralSubtitle need. CoralGraphics' M
 `CADisplayLink`, declared from macOS 14, so pass `-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0` if the configure
 warns about an older target.
 
+## Windows
+
+The playback core is the same; the platform pieces below it are the WMF, WASAPI and D3D/RHI ones:
+
+- **Decoder and demuxer** — CoralMedia reads the container with its built-in extractors and decodes
+  H.264/AAC with the Windows Media Foundation transforms. Given a `WindowsHardwareVideoSurface`, the
+  decoder opens a Media Foundation DXGI device manager on the application's `ID3D11Device` and returns
+  D3D11 textures instead of copying the planes to system memory. HEVC Main10 HDR10/HLG clips decode
+  through the platform HEVC transform, but the output is already 8-bit NV12 and CoralPlayback has no
+  HDR tone mapping on Windows yet: the picture is the raw HDR-to-8-bit conversion (flat colours)
+  rather than an SDR tone map. The zero-copy input refuses HDR sources for now: the hardware
+  transform renegotiates its output to P010, which the D3D11 sink does not sample yet, so the demo
+  starts those on the CPU input. Tone mapping and P010 zero-copy are follow-ups.
+- **Audio output** — CoralAudio's WASAPI backend opens the default output device and converts between
+  the media and device formats. `LivePlayer::Configuration::audioEnabled` lets a video-only host leave
+  the device alone; the demo's headless `--output` mode does that unless `--audio` is passed.
+- **Video output** — `Win32WindowSurface` wraps the application's `HWND` and
+  `WindowsVideoOutputNodeFactory` turns it into the graph's `WindowsSwapChainOutputNode`, which
+  presents into the window through the RHI (OpenGL through the window's WGL context, Vulkan through
+  `VK_KHR_win32_surface`). A host that composites the video itself uses `Win32TextureSurface` +
+  `WindowsTextureOutputNodeFactory` instead: the node renders into a ring of shared D3D11 textures and
+  `Win32VideoFrameSource` imports the current one into the UI device.
+- **Video input** — `WindowsVideoInput::createCpuInput` is the default: `CpuVideoFrameSink` over
+  `VideoFrameInputNode`, the same upload input the macOS `--cpu` demo uses. Media Foundation still
+  decodes in hardware when the machine has a hardware transform; without a `HardwareVideoSurface` it
+  copies the picture into system memory. `WindowsVideoInput::createZeroCopyInput` is the experimental
+  GPU path: the decoder's NV12 textures are converted to BGRA on the GPU with a `ID3D11VideoProcessor`
+  and `WindowsD3D11InputNode` imports the shared texture into the engine's Vulkan device (the OpenGL
+  backend falls back to a staging upload inside the node). No decoded pixel visits the CPU, and the
+  frame carries its media timestamp through the graph. It is not the default yet because the Media
+  Foundation transform can deliver a frame before the driver's GPU write into its surface has
+  completed, and it exposes no fence for that write; roughly one frame in ten can arrive torn.
+
+A host that uses the zero-copy path owns the `ID3D11Device`: it must be created with
+`D3D11_CREATE_DEVICE_VIDEO_SUPPORT` (Media Foundation's device manager requires it) and with
+multi-thread protection, and it has to outlive the player. `WindowsVideoDevice::create()` creates such
+a device for a host that has none; a host that already renders with Direct3D 11 passes its own device
+to `WindowsVideoInput::createZeroCopyInput`.
+
+The standalone configure needs the shared third-party tree (`libz`, `libyuv`, `libgtest`) and
+CoralGraphics' vendored tree; `scripts/bootstrap.ps1` fetches the first, the CoralGraphics checkout
+carries the second. `examples/video_player_demo_win32.cpp` is the end-to-end demo:
+`samples -> WMF decoder -> shared D3D11 texture -> effect graph -> swapchain` in a real window, with
+`--cpu` for the upload path and an automatic fallback when the decoder cannot produce textures.
+
+
 ## Tests
 
 The suites live in `tests/` and are built only for a top-level configure. They read their fixtures
@@ -254,8 +300,8 @@ cmake --build build-demo
 
 The top-level configure builds the same target at `build/examples/video_player_demo`; the standalone
 project above keeps it in `build-demo/`. The demo plays `assets/video/video720p_5s.mp4` from the
-repository root by default; pass a file to play another one. It is macOS-specific because the window
-is Cocoa:
+repository root by default; pass a file to play another one. It is built on macOS, where the window is
+Cocoa, and on Windows, where it is Win32:
 
 ```sh
 ./build-demo/video_player_demo                              # windowed, plays to the end
@@ -267,14 +313,22 @@ is Cocoa:
 ./build-demo/video_player_demo clip.mp4 --mute              # keep the device, at zero volume
 ```
 
+On Windows the executable is `video_player_demo.exe` and the same options apply; `--size` is the
+window's client area. The demo uploads the decoder's planes by default; `--zero-copy` selects the
+experimental shared-texture path (subject to the Media Foundation completion caveat above), and the
+demo falls back to the upload automatically when the decoder cannot produce textures on the host.
+
 The windowed demo plays the sound track by default; `--no-audio` builds no audio renderer, so it
-also runs on a machine without an output device. It uses the zero-copy Apple sink unless `--cpu`
-asks for the plane upload. `--output` is headless and leaves the audio off unless `--audio` is
-passed. The window presents the output IOSurface through a layer-backed view and
-updates it on every frame the effect graph commits; Esc/Q or closing the window ends it. With
-`--output <dir>` the demo reads the same IOSurface back (after waiting for the GPU) and writes
-`frame_00001.png` per sampled presentation position, without opening a window, so a build machine can
-verify that decoding, composition and the IOSurface output produced pixels:
+also runs on a machine without an output device. On macOS it uses the zero-copy Apple sink unless
+`--cpu` asks for the plane upload; on Windows it uses the plane upload unless `--zero-copy` asks for
+the shared D3D11 texture path. `--output` is headless and leaves the audio off unless `--audio` is
+passed. The
+macOS window presents the output IOSurface through a layer-backed view and updates it on every frame
+the effect graph commits; the Windows window is the target of the effect graph's swapchain and the
+picture is presented there directly. Esc/Q or closing the window ends either form. With
+`--output <dir>` the demo writes `frame_00001.png` per sampled presentation position, without opening
+a window, so a build machine can verify that decoding, composition and the video output produced
+pixels (macOS reads the IOSurface back; Windows uses `ReadbackOutputNode` for that run):
 
 ```sh
 ./build-demo/video_player_demo assets/video/video720p_5s.mp4 --output /tmp/coral-frames --frames 5

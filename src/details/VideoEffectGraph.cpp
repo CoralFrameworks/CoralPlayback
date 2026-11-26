@@ -211,6 +211,15 @@ EffectResult VideoEffectGraph::setOutput(const std::shared_ptr<EffectOutputNode>
   if (mOutput != nullptr && mOutput != output) {
     mEngine->removeOutput(mOutput);
     mEngine->detach(mOutput);
+    // Both calls retire the old runtime behind the submission ring, because its resources may still be
+    // sampled by a frame in flight. A window-backed output owns a swapchain on the application's native
+    // window, and the platform refuses a second swapchain for the same window
+    // (`VK_ERROR_NATIVE_WINDOW_IN_USE_KHR` on Vulkan), so the retirement has to finish before
+    // `prepareOutputs()` creates the replacement. Draining the ring here is what makes the late-surface
+    // path - a resize, or moving playback to another window - work instead of failing on the new output.
+    if (mEngine->isRunning()) {
+      mEngine->flushAndWait();
+    }
   }
 
   mOutput = output;

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "WindowsVideoOutputNodeFactory.h"
+#include <coral/playback/win32/WindowsVideoOutputNodeFactory.h>
 
 #if defined(_WIN32)
 

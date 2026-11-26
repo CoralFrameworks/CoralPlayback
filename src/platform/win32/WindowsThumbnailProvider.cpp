@@ -18,10 +18,23 @@
 
 #if defined(_WIN32)
 
+// `windows.h` defines `min` and `max` as macros unless `NOMINMAX` is set, which breaks every
+// `std::min`/`std::max` in this file, and `WIN32_LEAN_AND_MEAN` keeps the SDK headers that are not
+// used out of the translation unit. Both are set before any header includes `windows.h`.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <media/PixelBufferHandle.h>
 
 #include <mfapi.h>
 #include <mferror.h>
+// `mfreadwrite.h` declares its functions against the interfaces of `mfidl.h` (`IMFMediaSource`,
+// `IMFAttributes`, `IMFMediaSink`); recent SDKs no longer pull that header in themselves.
+#include <mfidl.h>
 #include <mfreadwrite.h>
 #include <propvarutil.h>
 #include <windows.h>

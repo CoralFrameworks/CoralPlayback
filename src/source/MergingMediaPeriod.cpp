@@ -133,7 +133,27 @@ const std::shared_ptr<TrackGroupArray>& MergingMediaPeriod::getTrackGroups() con
   return trackGroups;
 }
 
+MergingMediaPeriod::~MergingMediaPeriod() {
+  // The child periods announce their results through the ChildCallback objects this period owns.
+  // The children may still be loading when this period is dropped, and the loading task keeps a
+  // child alive; releasing the children here stops them and clears the callback they hold, before
+  // childCallbacks is destroyed with the other members.
+  releaseChildPeriods();
+}
+
+void MergingMediaPeriod::release() {
+  releaseChildPeriods();
+}
+
 void MergingMediaPeriod::releaseChildPeriods() {
+  // The child periods belong to the child sources, but this period is their callback owner: a child
+  // that is still loading would report into this period after it was destroyed. Releasing them
+  // stops their loaders and clears the callback before the reference is dropped.
+  for (const auto& period: periods) {
+    if (period != nullptr) {
+      period->release();
+    }
+  }
   periods.clear();
   streamOwners.clear();
 }

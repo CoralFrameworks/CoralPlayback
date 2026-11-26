@@ -591,7 +591,12 @@ private:
 
   int extractedSamplesCountAtStartOfLoad;
   bool loadingFinished;
-  bool released;
+  /**
+   * Set by {@link #release} before the loader is stopped, and read by the loader thread: it is what
+   * keeps a seek map that the loader extracts while the period is being released from calling back
+   * into a media source graph the player is tearing down.
+   */
+  std::atomic_bool released;
 
   /**
    * Whether {@link #releaseResources()} has already freed the resources of the period.

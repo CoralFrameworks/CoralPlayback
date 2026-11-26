@@ -26,14 +26,28 @@ namespace coral {
 /**
  * The Windows bridge from a player surface to the effect engine's swapchain output.
  *
+ * <p>This is the Windows counterpart of {@code AppleVideoOutputNodeFactory}: the application hands the
+ * player a `Win32WindowSurface` over its `HWND`, and the factory turns it into the graph's
+ * `WindowsSwapChainOutputNode`, which presents the composed frame into that window through the RHI.
+ *
  * <p>The factory understands a `VideoSurface` whose `getInstance()` is an `HWND`; that is what
- * `Win32WindowSurface` provides. It does not own the window.
+ * {@link CreateWin32WindowSurface} provides. It does not own the window - the application keeps the
+ * message loop and destroys it after the player - and `querySize()` answers the client-area size, so the
+ * effect graph renders at exactly the pixels the window shows.
+ *
+ * <p>A host that composites the video itself, rather than presenting it in a window, uses
+ * {@link WindowsTextureOutputNodeFactory} over a {@link Win32TextureSurface} instead.
  */
 class WindowsVideoOutputNodeFactory final : public VideoOutputNodeFactory {
 public:
-  std::shared_ptr<EffectOutputNode> create(
-      const std::shared_ptr<VideoSurface>& surface) override;
+  /**
+   * Creates the swapchain output node for a Win32 window surface.
+   *
+   * @return the node, or null when @p surface is not a surface over a live `HWND`.
+   */
+  std::shared_ptr<EffectOutputNode> create(const std::shared_ptr<VideoSurface>& surface) override;
 
+  /** Reports the window's client area, which is the size the swapchain presents at. */
   bool querySize(const std::shared_ptr<VideoSurface>& surface, uint32_t* width,
                  uint32_t* height) override;
 };

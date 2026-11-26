@@ -26,6 +26,8 @@
 
 #include <coral/playback/TextOutput.h>
 
+#include <media/Definitions.h>
+
 #include <functional>
 #include <memory>
 #include <vector>
@@ -119,6 +121,8 @@ private:
   AVCueGroup mLastGroup;
   std::vector<AVCuesWithTiming> mPendingResults;
   int64_t mPendingStartUs = 0;
+  /** The end time the parsed document states for its cues, or {@code kTimeUnset} when it has none. */
+  int64_t mPendingEndUs = Definitions::kTimeUnset;
   bool mHasPending = false;
 };
 

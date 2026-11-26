@@ -203,6 +203,47 @@ private:
   mutable std::mutex mMutex;
 };
 
+/** Records the order in which the cues of a side-loaded subtitle and an embedded track arrive. */
+class CueSequenceRecorder final : public coral::TextOutput {
+public:
+  void onCues(const AVCueGroup& cueGroup) override {
+    std::lock_guard<std::mutex> lock(mMutex);
+    bool hasFirstCue = false;
+    for (const auto& cue : cueGroup.getCues()) {
+      if (cue.text.find("Hello Coral") != std::string::npos) {
+        hasFirstCue = true;
+      }
+    }
+    if (hasFirstCue) {
+      ++mTextDeliveries;
+      mSawText = true;
+    } else if (cueGroup.isEmpty() && mSawText) {
+      mSawEmptyAfterText = true;
+    }
+  }
+
+  [[nodiscard]] bool sawText() const {
+    std::lock_guard<std::mutex> lock(mMutex);
+    return mSawText;
+  }
+
+  [[nodiscard]] bool sawEmptyAfterText() const {
+    std::lock_guard<std::mutex> lock(mMutex);
+    return mSawEmptyAfterText;
+  }
+
+  [[nodiscard]] int textDeliveries() const {
+    std::lock_guard<std::mutex> lock(mMutex);
+    return mTextDeliveries;
+  }
+
+private:
+  mutable std::mutex mMutex;
+  bool mSawText = false;
+  bool mSawEmptyAfterText = false;
+  int mTextDeliveries = 0;
+};
+
 } // namespace
 
 TEST(TextRendererTest, LivePlayerDeliversTheCuesToTheOutputAndTheListeners) {
@@ -234,6 +275,43 @@ TEST(TextRendererTest, LivePlayerDeliversTheCuesToTheOutputAndTheListeners) {
   player->pause();
   player->release();
 }
+TEST(TextRendererTest, ASideLoadedSubtitleIsNotClearedByTheEmbeddedTrack) {
+  const auto path = std::string(CORAL_ASSETS_DIR) + "/video/video720p_5s.mp4";
+  const auto subtitle = std::string(CORAL_ASSETS_DIR) + "/subtitle/sample.srt";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the video fixture is missing: " << path;
+  }
+  if (!std::filesystem::exists(subtitle)) {
+    GTEST_SKIP() << "the subtitle fixture is missing: " << subtitle;
+  }
+
+  // The MP4 carries an embedded CEA-708 track that the selector picks by default and that reports an
+  // empty group wherever it has no caption. The side-loaded file must own the cues while it is set.
+  auto player = coral::LivePlayer::create(path, coral::LivePlayer::Configuration{.audioEnabled = false});
+  ASSERT_NE(nullptr, player);
+  auto output = std::make_shared<CueSequenceRecorder>();
+  player->setSubtitleFile(subtitle);
+  player->setTextOutput(output);
+
+  player->prepare();
+  ASSERT_TRUE(waitUntil([&player] {
+    return player->getPlaybackState() == coral::Player::State::STATE_READY;
+  })) << "the player did not become ready";
+  player->play();
+  ASSERT_TRUE(waitUntil([&output] { return output->sawText(); }, std::chrono::milliseconds(15000)))
+      << "the side-loaded cue was never delivered";
+
+  // The first cue runs from 200ms to 1500ms; the empty groups of the embedded track used to arrive
+  // between its deliveries, which cleared the burned-in text.
+  std::this_thread::sleep_for(std::chrono::milliseconds(600));
+  EXPECT_FALSE(output->sawEmptyAfterText())
+      << "the embedded text track cleared the side-loaded cue";
+  EXPECT_EQ(output->textDeliveries(), 1)
+      << "the side-loaded cue was delivered once per clock tick instead of once per cue";
+  player->pause();
+  player->release();
+}
+
 TEST(TextRendererTest, DeliversTheCuesOfTheSamplesItReads) {
   const auto format = makeSrtFormat();
   auto stream = std::make_shared<FakeSubtitleStream>(format, std::vector<std::vector<uint8_t>>{

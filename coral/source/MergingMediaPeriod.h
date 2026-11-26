@@ -37,7 +37,10 @@ public:
       std::shared_ptr<TrackGroupArray> trackGroups,
       std::vector<SubtitleMetadata> metadata = {});
 
-  ~MergingMediaPeriod() override = default;
+  ~MergingMediaPeriod() override;
+
+  /** Releases the child periods; their callbacks point into this period. */
+  void release() override;
 
   void prepare(Callback* callback, int64_t positionUs) override;
   void maybeThrowPrepareError() override;

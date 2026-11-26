@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace coral {
 
@@ -68,6 +69,14 @@ private:
   int64_t timelineDurationUs;
   bool timelineIsSeekable;
   bool timelineIsLive;
+
+  /**
+   * The periods this source created, so that its destruction can release a period the caller did not.
+   * A period that is still loading keeps its loadable alive, and the loadable calls back into this
+   * source: releasing it before the source is destroyed is what keeps that callback off a dangling
+   * listener.
+   */
+  std::vector<std::weak_ptr<MediaPeriod>> createdPeriods;
 
 public:
   /**
