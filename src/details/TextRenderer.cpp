@@ -92,25 +92,25 @@ void TextRenderer::onInputFormatChanged(const std::shared_ptr<MediaFormat>& form
 
 void TextRenderer::onPositionReset(const int64_t positionUs, const bool joining) {
   static_cast<void>(joining);
-  // The timeline may already hold the cues of the target position; rasterise the first group before the
-  // screen is cleared, so the first frame after the seek finds it in the cache.
-  if (mPrefetchListener != nullptr) {
-    const auto group = mTimeline->cuesAt(positionUs);
-    if (!group.isEmpty()) {
-      mPrefetchListener(group);
-    }
+  // The timeline is kept: a cue that started before the seek and still covers the target has to stay
+  // on screen. The sample queue discards the samples before the seek position, so a cue that started
+  // before it cannot be read again; the cues already read into the timeline are the only copy left.
+  // New samples replace the cues they cover, so a re-read cue is not shown twice.
+  const auto group = mTimeline->cuesAt(positionUs);
+  if (mPrefetchListener != nullptr && !group.isEmpty()) {
+    // Rasterise the first group before the next frame, so the target position is in the cache.
+    mPrefetchListener(group);
   }
   mInputEnded = false;
   mOutputEnded = false;
   if (mParser != nullptr) {
     mParser->reset();
   }
-  mTimeline->clear();
   mHasPending = false;
   mPendingResults.clear();
-  mHasLastGroup = false;
-  // The cues of the previous position are cleared before the ones of the new position arrive.
-  deliver(AVCueGroup(std::vector<AVCue>{}, positionUs));
+  // Deliver the cues of the target position (or an empty group when none covers it), which is also
+  // what clears the cues of the previous position.
+  deliver(group);
 }
 
 void TextRenderer::onDisabled() {
