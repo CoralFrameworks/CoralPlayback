@@ -47,6 +47,14 @@ public:
   struct Configuration {
     /** Build the audio renderer and open an output device. */
     bool audioEnabled = true;
+    /**
+     * How many audio renderers to build.
+     *
+     * <p>The default is one. A caller that wants a renderer per audio track can ask for more; only
+     * the renderer that owns the selected track is enabled, so the extra ones are prepared but do
+     * not output simultaneously.
+     */
+    int audioRendererCount = 1;
     /** Build the video renderer. */
     bool videoEnabled = true;
     /** Build the still-image renderer. */
@@ -131,7 +139,55 @@ public:
    */
   void setVideoScalingMode(int mode) override;
 
+  void setVideoScaleMode(VideoScaleMode mode) override;
+
+  [[nodiscard]] VideoScaleMode getVideoScaleMode() const override;
+
+  void setVideoMirror(bool horizontal, bool vertical) override;
+
   void setTextOutput(const std::shared_ptr<TextOutput>& output) override;
+
+  [[nodiscard]] Tracks getCurrentTracks() const override;
+
+  [[nodiscard]] VideoFrameOutput getVideoFrameOutput() const override;
+
+  [[nodiscard]] VideoColorInfo getVideoColorInfo() const override;
+
+  [[nodiscard]] std::vector<Chapter> getChapters() const override;
+
+  [[nodiscard]] std::vector<AudioRendererStats> getAudioRendererStats() const override;
+
+  [[nodiscard]] uint64_t getAudioRendererSwitchCount() const override;
+
+  void setThumbnailProvider(std::shared_ptr<ThumbnailProvider> provider) override;
+
+  [[nodiscard]] std::shared_ptr<ThumbnailProvider> getThumbnailProvider() const override;
+
+  void requestThumbnail(int64_t positionUs, ThumbnailProvider::Callback callback) override;
+
+  void prefetchThumbnail(int64_t positionUs) override;
+
+  void prefetchThumbnails(int64_t startUs, int64_t endUs, int64_t stepUs) override;
+
+  void cancelThumbnailPrefetch() override;
+
+  void setPreferredAudioLanguage(const std::string& language) override;
+
+  [[nodiscard]] std::string getPreferredAudioLanguage() const override;
+
+  [[nodiscard]] std::string getPreferredTextLanguage() const override;
+
+  void setPreferredTextRoleFlags(int roleFlags) override;
+
+  [[nodiscard]] int getPreferredTextRoleFlags() const override;
+
+  void setSelectUndeterminedTextLanguage(bool select) override;
+
+  [[nodiscard]] bool getSelectUndeterminedTextLanguage() const override;
+
+  void selectTrack(int rendererIndex, int groupIndex, int trackIndex) override;
+
+  void clearTrackSelection(int rendererIndex) override;
 
   /**
    * Sets the preferred language of the selected subtitle track, or clears it with an empty string.
@@ -248,6 +304,10 @@ public:
    */
   [[nodiscard]] const RepeatMode& getRepeatMode() const override;
 
+  void setShuffleModeEnabled(bool enabled) override;
+
+  [[nodiscard]] bool getShuffleModeEnabled() const override;
+
   /**
    * Whether the player is currently loading the source.
    */
@@ -284,6 +344,10 @@ public:
    * @return the current position in microseconds
    */
   [[nodiscard]] int64_t getCurrentPositionUs() const override;
+
+  [[nodiscard]] int64_t getBufferedPositionUs() const override;
+
+  [[nodiscard]] std::vector<BufferedRange> getBufferedRanges() const override;
 
   /**
    * Gets the duration of the file.
@@ -348,6 +412,18 @@ public:
   [[nodiscard]] int getMediaItemCount() const override;
 
   [[nodiscard]] const std::shared_ptr<MediaItem>& getMediaItemAt(int index) const override;
+
+  [[nodiscard]] int getCurrentMediaItemIndex() const override;
+
+  [[nodiscard]] int getNextMediaItemIndex() const override;
+
+  [[nodiscard]] int getPreviousMediaItemIndex() const override;
+
+  void seekToMediaItem(int index) override;
+
+  void seekToNextMediaItem() override;
+
+  void seekToPreviousMediaItem() override;
 
   void addMediaItems(int index,
       const std::vector<std::shared_ptr<MediaItem>>& mediaItems) override;

@@ -82,6 +82,13 @@ void MergingMediaPeriod::onChildPrepared() {
         if (!metadata[index].mimeType.empty()) updated->setMimeType(metadata[index].mimeType);
         if (!metadata[index].language.empty()) updated->setLanguage(metadata[index].language);
         if (!metadata[index].label.empty()) updated->setLabel(metadata[index].label);
+        if (metadata[index].roleFlags != 0) {
+          updated->setRoleFlags(metadata[index].roleFlags);
+        }
+        if (metadata[index].selectionFlags != 0) {
+          updated->setSelectionFlags(static_cast<MediaSelectionFlags>(
+            metadata[index].selectionFlags));
+        }
         if (!metadata[index].id.empty()) {
           // Do not use std::stoi here: the Android build disables C++ exceptions, so a non-numeric
           // id such as "styled-ass" would abort the process instead of throwing a catchable error.
@@ -126,7 +133,27 @@ const std::shared_ptr<TrackGroupArray>& MergingMediaPeriod::getTrackGroups() con
   return trackGroups;
 }
 
+MergingMediaPeriod::~MergingMediaPeriod() {
+  // The child periods announce their results through the ChildCallback objects this period owns.
+  // The children may still be loading when this period is dropped, and the loading task keeps a
+  // child alive; releasing the children here stops them and clears the callback they hold, before
+  // childCallbacks is destroyed with the other members.
+  releaseChildPeriods();
+}
+
+void MergingMediaPeriod::release() {
+  releaseChildPeriods();
+}
+
 void MergingMediaPeriod::releaseChildPeriods() {
+  // The child periods belong to the child sources, but this period is their callback owner: a child
+  // that is still loading would report into this period after it was destroyed. Releasing them
+  // stops their loaders and clears the callback before the reference is dropped.
+  for (const auto& period: periods) {
+    if (period != nullptr) {
+      period->release();
+    }
+  }
   periods.clear();
   streamOwners.clear();
 }

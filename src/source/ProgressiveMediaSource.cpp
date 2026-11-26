@@ -112,7 +112,18 @@ void ProgressiveMediaSource::prepareSourceInternal() {
 }
 
 void ProgressiveMediaSource::releaseSourceInternal() {
-  // do nothing
+  // A period the caller did not release keeps its loading task and loadable alive, and the loadable
+  // reports back into this source. Releasing the remaining periods here means the queued callbacks
+  // that run after this method see a released period instead of a destroyed listener.
+  for (const auto& weakPeriod: createdPeriods) {
+    if (const auto period = weakPeriod.lock(); period != nullptr) {
+      if (auto progressive = std::dynamic_pointer_cast<ProgressiveMediaPeriod>(period);
+          progressive != nullptr) {
+        progressive->release();
+      }
+    }
+  }
+  createdPeriods.clear();
 }
 
 std::shared_ptr<MediaPeriod> ProgressiveMediaSource::createPeriod(MediaPeriodId id,
@@ -128,7 +139,7 @@ std::shared_ptr<MediaPeriod> ProgressiveMediaSource::createPeriod(MediaPeriodId 
                                                         : Definitions::kTimeUnset;
   const int64_t imageDurationUs =
       imageDurationMs > 0 ? imageDurationMs * 1000 : Definitions::kTimeUnset;
-  return std::make_shared<ProgressiveMediaPeriod>(inputUrl,
+  auto period = std::make_shared<ProgressiveMediaPeriod>(inputUrl,
       std::move(extractor),
       this,
       allocator,
@@ -136,9 +147,19 @@ std::shared_ptr<MediaPeriod> ProgressiveMediaSource::createPeriod(MediaPeriodId 
       createEventDispatcher(id),
       loadErrorHandlingPolicy,
       imageDurationUs);
+  createdPeriods.push_back(period);
+  return period;
 }
 
 void ProgressiveMediaSource::releasePeriod(const std::shared_ptr<MediaPeriod>& mediaPeriod) {
+  for (auto it = createdPeriods.begin(); it != createdPeriods.end();) {
+    const auto period = it->lock();
+    if (period == nullptr || period == mediaPeriod) {
+      it = createdPeriods.erase(it);
+    } else {
+      ++it;
+    }
+  }
   auto progressivePeriod = std::dynamic_pointer_cast<ProgressiveMediaPeriod>(mediaPeriod);
   if (progressivePeriod != nullptr) {
     progressivePeriod->release();

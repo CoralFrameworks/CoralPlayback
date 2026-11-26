@@ -40,23 +40,46 @@ constexpr char kLayoutShader[] = R"(
   vec2 targetSize = max(effectTargetSize().xy, vec2(1.0));
 
   int mode = int(effectParams(0).x + 0.5);
+  int rotation = int(effectParams(2).x + 0.5);
+  bool mirrorH = effectParams(2).y > 0.5;
+  bool mirrorV = effectParams(2).z > 0.5;
+
+  // The rotated image has its extent swapped for a quarter turn, which is what Fit/Crop must
+  // measure; using the unrotated size would letterbox a portrait video into a landscape target.
+  vec2 rotatedSize = (rotation == 1 || rotation == 3) ? sourceSize.yx : sourceSize;
   float scale;
   if (mode == 0) {
-    // Stretch: sample the whole source.
-    vec2 sourceUv = uv;
-    return texture(uInput0, sourceUv);
+    scale = 1.0;
   } else if (mode == 1) {
     // Fit: preserve aspect ratio, letterbox the remainder.
-    scale = min(targetSize.x / sourceSize.x, targetSize.y / sourceSize.y);
+    scale = min(targetSize.x / rotatedSize.x, targetSize.y / rotatedSize.y);
   } else {
     // Crop: preserve aspect ratio, fill and crop the overflow.
-    scale = max(targetSize.x / sourceSize.x, targetSize.y / sourceSize.y);
+    scale = max(targetSize.x / rotatedSize.x, targetSize.y / rotatedSize.y);
   }
 
-  vec2 visibleSource = targetSize / max(scale, 1.0e-6);
-  vec2 sourceUv = (uv - 0.5) * visibleSource / sourceSize + 0.5;
-  if (mode == 1 && (sourceUv.x < 0.0 || sourceUv.x > 1.0 || sourceUv.y < 0.0 || sourceUv.y > 1.0)) {
-    return effectParams(1);
+  // `rotatedUv` is in the rotated image's coordinates. Calculate the content rectangle there, then
+  // inverse-rotate it to the source texture; applying rotation before Fit is what keeps the content
+  // rectangle and the letterbox in the same orientation. Stretch samples the whole rotated image.
+  vec2 rotatedUv = uv;
+  if (mode != 0) {
+    vec2 visibleSource = targetSize / max(scale, 1.0e-6);
+    rotatedUv = (uv - 0.5) * visibleSource / rotatedSize + 0.5;
+    if (mode == 1 &&
+        (rotatedUv.x < 0.0 || rotatedUv.x > 1.0 || rotatedUv.y < 0.0 || rotatedUv.y > 1.0)) {
+      return effectParams(1);
+    }
+  }
+  if (mirrorH) rotatedUv.x = 1.0 - rotatedUv.x;
+  if (mirrorV) rotatedUv.y = 1.0 - rotatedUv.y;
+
+  vec2 sourceUv = rotatedUv;
+  if (rotation == 1) {
+    sourceUv = vec2(rotatedUv.y, 1.0 - rotatedUv.x);
+  } else if (rotation == 2) {
+    sourceUv = vec2(1.0 - rotatedUv.x, 1.0 - rotatedUv.y);
+  } else if (rotation == 3) {
+    sourceUv = vec2(1.0 - rotatedUv.y, rotatedUv.x);
   }
   return texture(uInput0, sourceUv);
 )";
@@ -97,6 +120,7 @@ std::shared_ptr<VideoLayoutPass> VideoLayoutPass::create(
   shader.parameters = {
       { "mode", EffectValueType::Int },
       { "letterbox", EffectValueType::Color },
+      { "transform", EffectValueType::Vec4 },
   };
   if (pass->setShader(shader) != EffectResult::Success) {
     return nullptr;
@@ -104,7 +128,9 @@ std::shared_ptr<VideoLayoutPass> VideoLayoutPass::create(
 
   auto layout = std::shared_ptr<VideoLayoutPass>(new VideoLayoutPass(pass));
   if (layout->setScaleMode(EffectScaleMode::Fit) != EffectResult::Success ||
-      layout->setLetterboxColor(EffectColor{ 0.0f, 0.0f, 0.0f, 1.0f }) != EffectResult::Success) {
+      layout->setLetterboxColor(EffectColor{ 0.0f, 0.0f, 0.0f, 1.0f }) != EffectResult::Success ||
+      layout->setRotation(EffectRotation::None) != EffectResult::Success ||
+      layout->setMirror(false, false) != EffectResult::Success) {
     return nullptr;
   }
   return layout;
@@ -119,6 +145,65 @@ EffectResult VideoLayoutPass::setScaleMode(const EffectScaleMode mode) {
   const EffectResult result = mPass->setParameter("mode", scaleModeValue(mode));
   if (result == EffectResult::Success) {
     mScaleMode = mode;
+  }
+  return result;
+}
+
+EffectResult VideoLayoutPass::setRotation(const EffectRotation rotation) {
+  if (mPass == nullptr) {
+    return EffectResult::NotAttached;
+  }
+  int value = 0;
+  switch (rotation) {
+    case EffectRotation::Clockwise90:
+      value = 1;
+      break;
+    case EffectRotation::Clockwise180:
+      value = 2;
+      break;
+    case EffectRotation::Clockwise270:
+      value = 3;
+      break;
+    case EffectRotation::None:
+    default:
+      value = 0;
+      break;
+  }
+  const EffectResult result = mPass->setParameter("transform",
+    EffectVec4{ static_cast<float>(value), mMirrorHorizontal ? 1.0f : 0.0f,
+                mMirrorVertical ? 1.0f : 0.0f, 0.0f });
+  if (result == EffectResult::Success) {
+    mRotation = rotation;
+  }
+  return result;
+}
+
+EffectResult VideoLayoutPass::setMirror(const bool horizontal, const bool vertical) {
+  if (mPass == nullptr) {
+    return EffectResult::NotAttached;
+  }
+  int rotation = 0;
+  switch (mRotation) {
+    case EffectRotation::Clockwise90:
+      rotation = 1;
+      break;
+    case EffectRotation::Clockwise180:
+      rotation = 2;
+      break;
+    case EffectRotation::Clockwise270:
+      rotation = 3;
+      break;
+    case EffectRotation::None:
+    default:
+      rotation = 0;
+      break;
+  }
+  const EffectResult result = mPass->setParameter("transform",
+    EffectVec4{ static_cast<float>(rotation), horizontal ? 1.0f : 0.0f,
+                vertical ? 1.0f : 0.0f, 0.0f });
+  if (result == EffectResult::Success) {
+    mMirrorHorizontal = horizontal;
+    mMirrorVertical = vertical;
   }
   return result;
 }

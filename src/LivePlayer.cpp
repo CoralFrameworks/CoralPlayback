@@ -35,7 +35,10 @@ std::vector<std::shared_ptr<Renderer>> createRenderers(
     const LivePlayer::Configuration& configuration) {
   auto renderers = std::vector<std::shared_ptr<Renderer>>();
   if (configuration.audioEnabled) {
-    renderers.push_back(std::make_shared<DecodeAudioRenderer>());
+    const int count = configuration.audioRendererCount > 0 ? configuration.audioRendererCount : 1;
+    for (int index = 0; index < count; ++index) {
+      renderers.push_back(std::make_shared<DecodeAudioRenderer>());
+    }
   }
   if (configuration.videoEnabled) {
     renderers.push_back(std::make_shared<DecodeVideoRenderer>());
@@ -149,8 +152,105 @@ void LivePlayer::setVideoScalingMode(int mode) {
   mImpl->setVideoScalingMode(mode);
 }
 
+void LivePlayer::setVideoScaleMode(const VideoScaleMode mode) {
+  mImpl->setVideoScaleMode(mode);
+}
+
+LivePlayer::VideoScaleMode LivePlayer::getVideoScaleMode() const {
+  return mImpl->getVideoScaleMode();
+}
+
+void LivePlayer::setVideoMirror(const bool horizontal, const bool vertical) {
+  mImpl->setVideoMirror(horizontal, vertical);
+}
+
 void LivePlayer::setTextOutput(const std::shared_ptr<TextOutput>& output) {
   mImpl->setTextOutput(output);
+}
+
+Tracks LivePlayer::getCurrentTracks() const {
+  return mImpl->getCurrentTracks();
+}
+
+VideoFrameOutput LivePlayer::getVideoFrameOutput() const {
+  return mImpl->getVideoFrameOutput();
+}
+
+VideoColorInfo LivePlayer::getVideoColorInfo() const {
+  return mImpl->getVideoColorInfo();
+}
+
+std::vector<Chapter> LivePlayer::getChapters() const {
+  return mImpl->getChapters();
+}
+
+std::vector<AudioRendererStats> LivePlayer::getAudioRendererStats() const {
+  return mImpl->getAudioRendererStats();
+}
+
+uint64_t LivePlayer::getAudioRendererSwitchCount() const {
+  return mImpl->getAudioRendererSwitchCount();
+}
+
+void LivePlayer::setThumbnailProvider(std::shared_ptr<ThumbnailProvider> provider) {
+  mImpl->setThumbnailProvider(std::move(provider));
+}
+
+std::shared_ptr<ThumbnailProvider> LivePlayer::getThumbnailProvider() const {
+  return mImpl->getThumbnailProvider();
+}
+
+void LivePlayer::requestThumbnail(const int64_t positionUs, ThumbnailProvider::Callback callback) {
+  mImpl->requestThumbnail(positionUs, std::move(callback));
+}
+
+void LivePlayer::prefetchThumbnail(const int64_t positionUs) {
+  mImpl->prefetchThumbnail(positionUs);
+}
+
+void LivePlayer::prefetchThumbnails(const int64_t startUs, const int64_t endUs,
+                                    const int64_t stepUs) {
+  mImpl->prefetchThumbnails(startUs, endUs, stepUs);
+}
+
+void LivePlayer::cancelThumbnailPrefetch() {
+  mImpl->cancelThumbnailPrefetch();
+}
+
+void LivePlayer::setPreferredAudioLanguage(const std::string& language) {
+  mImpl->setPreferredAudioLanguage(language);
+}
+
+std::string LivePlayer::getPreferredAudioLanguage() const {
+  return mImpl->getPreferredAudioLanguage();
+}
+
+std::string LivePlayer::getPreferredTextLanguage() const {
+  return mImpl->getPreferredTextLanguage();
+}
+
+void LivePlayer::setPreferredTextRoleFlags(const int roleFlags) {
+  mImpl->setPreferredTextRoleFlags(roleFlags);
+}
+
+int LivePlayer::getPreferredTextRoleFlags() const {
+  return mImpl->getPreferredTextRoleFlags();
+}
+
+void LivePlayer::setSelectUndeterminedTextLanguage(const bool select) {
+  mImpl->setSelectUndeterminedTextLanguage(select);
+}
+
+bool LivePlayer::getSelectUndeterminedTextLanguage() const {
+  return mImpl->getSelectUndeterminedTextLanguage();
+}
+
+void LivePlayer::selectTrack(int rendererIndex, int groupIndex, int trackIndex) {
+  mImpl->selectTrack(rendererIndex, groupIndex, trackIndex);
+}
+
+void LivePlayer::clearTrackSelection(int rendererIndex) {
+  mImpl->clearTrackSelection(rendererIndex);
 }
 
 void LivePlayer::setPreferredTextLanguage(const std::string& language, const bool selectUndetermined) {
@@ -240,6 +340,14 @@ const RepeatMode& LivePlayer::getRepeatMode() const {
   return mImpl->getRepeatMode();
 }
 
+void LivePlayer::setShuffleModeEnabled(const bool enabled) {
+  mImpl->setShuffleModeEnabled(enabled);
+}
+
+bool LivePlayer::getShuffleModeEnabled() const {
+  return mImpl->getShuffleModeEnabled();
+}
+
 bool LivePlayer::isLoading() const {
   return mImpl->isLoading();
 }
@@ -262,6 +370,14 @@ const Parameters& LivePlayer::getPlaybackParameters() const {
 
 int64_t LivePlayer::getCurrentPositionUs() const {
   return mImpl->getCurrentPositionUs();
+}
+
+int64_t LivePlayer::getBufferedPositionUs() const {
+  return mImpl->getBufferedPositionUs();
+}
+
+std::vector<Player::BufferedRange> LivePlayer::getBufferedRanges() const {
+  return mImpl->getBufferedRanges();
 }
 
 int64_t LivePlayer::getDurationUs() const {
@@ -324,6 +440,30 @@ int LivePlayer::getMediaItemCount() const {
 
 const std::shared_ptr<MediaItem>& LivePlayer::getMediaItemAt(int index) const {
   return mImpl->getMediaItemAt(index);
+}
+
+int LivePlayer::getCurrentMediaItemIndex() const {
+  return mImpl->getCurrentMediaItemIndex();
+}
+
+int LivePlayer::getNextMediaItemIndex() const {
+  return mImpl->getNextMediaItemIndex();
+}
+
+int LivePlayer::getPreviousMediaItemIndex() const {
+  return mImpl->getPreviousMediaItemIndex();
+}
+
+void LivePlayer::seekToMediaItem(const int index) {
+  mImpl->seekToMediaItem(index);
+}
+
+void LivePlayer::seekToNextMediaItem() {
+  mImpl->seekToNextMediaItem();
+}
+
+void LivePlayer::seekToPreviousMediaItem() {
+  mImpl->seekToPreviousMediaItem();
 }
 
 void LivePlayer::addMediaItems(int index,

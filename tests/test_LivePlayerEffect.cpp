@@ -17,8 +17,7 @@
 #include <coral/playback/LivePlayer.h>
 #include <coral/playback/VideoOutput.h>
 #include <coral/playback/win32/Win32WindowSurface.h>
-
-#include "platform/win32/WindowsVideoOutputNodeFactory.h"
+#include <coral/playback/win32/WindowsVideoOutputNodeFactory.h>
 
 #include <effect/EffectEngine.h>
 
@@ -62,8 +61,12 @@ bool waitFor(const std::function<bool()>& predicate, const std::chrono::millisec
   return predicate();
 }
 
-TEST(LivePlayerEffectTest, RendersARealVideoThroughTheWindowsOutput) {  const std::string path =
+TEST(LivePlayerEffectTest, RendersARealVideoThroughTheWindowsOutput) {
+  const std::string path =
       std::string(CORAL_ASSETS_DIR) + "/video/android-screens-lavf-56.36.100-aac-avc-main-1280x720.mkv";
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "the H.264/AAC fixture is missing: " << path;
+  }
   auto player = LivePlayer::create(path);
   ASSERT_NE(player, nullptr);
   player->enableVideoEffectPipeline(std::make_shared<WindowsVideoOutputNodeFactory>());
@@ -98,6 +101,9 @@ TEST(LivePlayerEffectTest, RendersSubtitlesThroughTheGpuOverlay) {
   const std::string videoPath =
       std::string(CORAL_ASSETS_DIR) + "/video/android-screens-lavf-56.36.100-aac-avc-main-1280x720.mkv";
   const std::string subtitlePath = std::string(CORAL_ASSETS_DIR) + "/subtitle/sample.srt";
+  if (!std::filesystem::exists(videoPath) || !std::filesystem::exists(subtitlePath)) {
+    GTEST_SKIP() << "the video and subtitle fixtures are missing: " << videoPath;
+  }
 
   auto player = LivePlayer::create(videoPath);
   ASSERT_NE(player, nullptr);
@@ -134,6 +140,9 @@ TEST(LivePlayerEffectTest, CompositesAPreRenderedLottieOverlay) {
       std::string(CORAL_ASSETS_DIR) + "/video/android-screens-lavf-56.36.100-aac-avc-main-1280x720.mkv";
   const std::filesystem::path lottiePath =
       std::filesystem::path(CORAL_GRAPHICS_RESOURCE_DIR) / "apitest" / "lottie" / "gear.json";
+  if (!std::filesystem::exists(videoPath) || !std::filesystem::exists(lottiePath)) {
+    GTEST_SKIP() << "the video or Lottie fixture is missing: " << videoPath;
+  }
 
   std::ifstream lottieFile(lottiePath, std::ios::binary);
   std::ostringstream lottieJson;
@@ -176,6 +185,9 @@ TEST(LivePlayerEffectTest, CompositesAPreRenderedLottieOverlay) {
 
 TEST(LivePlayerEffectTest, RendersAnImageThroughTheSameGraph) {
   const std::string imagePath = std::string(CORAL_ASSETS_DIR) + "/image/image.png";
+  if (!std::filesystem::exists(imagePath)) {
+    GTEST_SKIP() << "the image fixture is missing: " << imagePath;
+  }
   auto player = LivePlayer::create(imagePath);
   ASSERT_NE(player, nullptr);
   player->enableVideoEffectPipeline(std::make_shared<WindowsVideoOutputNodeFactory>());
@@ -206,6 +218,9 @@ TEST(LivePlayerEffectTest, RendersAnImageThroughTheSameGraph) {
 
 TEST(LivePlayerEffectTest, AnImageHonoursItsExplicitDuration) {
   const std::string imagePath = std::string(CORAL_ASSETS_DIR) + "/image/image.png";
+  if (!std::filesystem::exists(imagePath)) {
+    GTEST_SKIP() << "the image fixture is missing: " << imagePath;
+  }
   auto item = MediaItem::fromUrl(imagePath, {}, 300);
   auto player = LivePlayer::create(item);
   ASSERT_NE(player, nullptr);

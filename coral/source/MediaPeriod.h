@@ -72,6 +72,14 @@ public:
    * @param positionUs The expected starting position, in microseconds.
    */
   virtual void prepare(Callback* callback, int64_t positionUs) = 0;
+  /**
+   * Releases the period. Called by its owner before the period is dropped, so the period can stop
+   * its loading and forget the callback it reports to. A period that a wrapping period (such as the
+   * merging period) owns has to be released the same way, or a load that finishes after the wrapper
+   * is gone would call into the wrapper.
+   */
+  virtual void release() {
+  }
 
   /**
    * Throws if this period cannot be prepared.

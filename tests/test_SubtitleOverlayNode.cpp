@@ -17,6 +17,9 @@
 #include "details/SubtitleOverlayNode.h"
 
 #include <effect/EffectEngine.h>
+#include <effect/EffectPassNode.h>
+#include <effect/ReadbackOutputNode.h>
+#include <effect/VideoFrameInputNode.h>
 #include <subtitle/SubtitleRenderer.h>
 
 #include <graphics/Bitmap.h>
@@ -70,6 +73,185 @@ TEST(SubtitleOverlayNodeTest, RendersVisibleGlyphPixels) {
     }
   }
   EXPECT_GT(opaque, 0u);
+}
+
+TEST(SubtitleOverlayNodeTest, CompositesBitmapCuePixelsIntoTheOutput) {
+  EffectEngineConfig config;
+  config.renderMode = EffectRenderMode::Manual;
+  config.renderWidth = 4;
+  config.renderHeight = 4;
+  const auto engine = EffectEngine::create(config);
+  ASSERT_NE(engine, nullptr);
+
+  const auto input = VideoFrameInputNode::create(4, 4);
+  const auto output = ReadbackOutputNode::create();
+  ASSERT_NE(input, nullptr);
+  ASSERT_NE(output, nullptr);
+  const auto overlay = SubtitleOverlayNode::create(engine);
+  ASSERT_NE(overlay, nullptr);
+  // SubtitleOverlayNode::create already attaches its pass; the input and output are attached here.
+  ASSERT_EQ(engine->attach(input), EffectResult::Success);
+  ASSERT_EQ(engine->attach(output), EffectResult::Success);
+  ASSERT_EQ(engine->connect(input, overlay->node()), EffectResult::Success);
+  ASSERT_EQ(engine->connect(overlay->node(), output), EffectResult::Success);
+  ASSERT_EQ(engine->setOutput(output), EffectResult::Success);
+  overlay->setOutputSize(4, 4);
+  overlay->setEnabled(true);
+
+  // A full-frame green bitmap cue; the base is black, so every output pixel must become green.
+  AVCue cue;
+  cue.bitmap.width = 2;
+  cue.bitmap.height = 2;
+  cue.bitmap.format = PixelFormat::kFormatRGBA;
+  cue.bitmap.rowBytes = 2 * 4;
+  cue.bitmap.pixels.assign(2 * 2 * 4, 0);
+  for (size_t i = 0; i < 4; ++i) {
+    cue.bitmap.pixels[i * 4 + 1] = 255;
+    cue.bitmap.pixels[i * 4 + 3] = 255;
+  }
+  cue.position = 0.0f;
+  cue.line = 0.0f;
+  cue.size = 1.0f;
+  cue.bitmapHeight = 1.0f;
+  cue.positionAnchor = AVCue::AnchorType::kStart;
+  cue.lineAnchor = AVCue::AnchorType::kStart;
+  overlay->setCueGroup(AVCueGroup(std::vector<AVCue>{cue}));
+  ASSERT_TRUE(overlay->isEnabled());
+
+  std::vector<uint8_t> black(4u * 4u * 4u, 255u);
+  for (size_t i = 0; i < 4u * 4u; ++i) {
+    black[i * 4 + 0] = 0;
+    black[i * 4 + 1] = 0;
+    black[i * 4 + 2] = 0;
+  }
+  VideoFrameDesc frame;
+  frame.width = 4;
+  frame.height = 4;
+  frame.format = EffectPixelFormat::RGBA8;
+  frame.planeCount = 1;
+  frame.planes[0].data = black.data();
+  frame.planes[0].rowBytes = 4 * 4;
+  if (engine->start() != EffectResult::Success) {
+    GTEST_SKIP() << "no GPU device on this host: " << engine->diagnostics();
+  }
+  ASSERT_EQ(input->submit(frame), EffectResult::Success);
+  ASSERT_EQ(engine->execute(), EffectResult::Success);
+  ASSERT_EQ(engine->flushAndWait(), EffectResult::Success);
+
+  EffectFrame metadata;
+  std::vector<uint8_t> readback;
+  ASSERT_TRUE(output->waitForFrame(&metadata, &readback));
+  ASSERT_EQ(readback.size(), 4u * 4u * 4u);
+  for (size_t i = 0; i < 4u * 4u; ++i) {
+    EXPECT_GE(readback[i * 4 + 1], 245u) << "pixel " << i << " should carry the green subtitle";
+    EXPECT_GE(readback[i * 4 + 3], 245u);
+  }
+  engine->stop();
+}
+
+namespace {
+
+AVCue makeFullFrameBitmapCue(const uint8_t red, const uint8_t green, const uint8_t blue,
+                             const int zIndex) {
+  AVCue cue;
+  cue.bitmap.width = 2;
+  cue.bitmap.height = 2;
+  cue.bitmap.format = PixelFormat::kFormatRGBA;
+  cue.bitmap.rowBytes = 2 * 4;
+  cue.bitmap.pixels.assign(2 * 2 * 4, 0);
+  for (size_t i = 0; i < 4; ++i) {
+    cue.bitmap.pixels[i * 4 + 0] = red;
+    cue.bitmap.pixels[i * 4 + 1] = green;
+    cue.bitmap.pixels[i * 4 + 2] = blue;
+    cue.bitmap.pixels[i * 4 + 3] = 255;
+  }
+  cue.position = 0.0f;
+  cue.line = 0.0f;
+  cue.size = 1.0f;
+  cue.bitmapHeight = 1.0f;
+  cue.positionAnchor = AVCue::AnchorType::kStart;
+  cue.lineAnchor = AVCue::AnchorType::kStart;
+  cue.zIndex = zIndex;
+  return cue;
+}
+
+} // namespace
+
+TEST(SubtitleOverlayNodeTest, ReplacesAndOrdersBitmapCues) {
+  EffectEngineConfig config;
+  config.renderMode = EffectRenderMode::Manual;
+  config.renderWidth = 4;
+  config.renderHeight = 4;
+  const auto engine = EffectEngine::create(config);
+  ASSERT_NE(engine, nullptr);
+  const auto input = VideoFrameInputNode::create(4, 4);
+  const auto output = ReadbackOutputNode::create();
+  const auto overlay = SubtitleOverlayNode::create(engine);
+  ASSERT_NE(input, nullptr);
+  ASSERT_NE(output, nullptr);
+  ASSERT_NE(overlay, nullptr);
+  ASSERT_EQ(engine->attach(input), EffectResult::Success);
+  ASSERT_EQ(engine->attach(output), EffectResult::Success);
+  ASSERT_EQ(engine->connect(input, overlay->node()), EffectResult::Success);
+  ASSERT_EQ(engine->connect(overlay->node(), output), EffectResult::Success);
+  ASSERT_EQ(engine->setOutput(output), EffectResult::Success);
+  overlay->setOutputSize(4, 4);
+  overlay->setEnabled(true);
+
+  std::vector<uint8_t> black(4u * 4u * 4u, 255u);
+  for (size_t i = 0; i < 4u * 4u; ++i) {
+    black[i * 4 + 0] = 0;
+    black[i * 4 + 1] = 0;
+    black[i * 4 + 2] = 0;
+  }
+  VideoFrameDesc frame;
+  frame.width = 4;
+  frame.height = 4;
+  frame.format = EffectPixelFormat::RGBA8;
+  frame.planeCount = 1;
+  frame.planes[0].data = black.data();
+  frame.planes[0].rowBytes = 4 * 4;
+  if (engine->start() != EffectResult::Success) {
+    GTEST_SKIP() << "no GPU device on this host: " << engine->diagnostics();
+  }
+
+  const auto render = [&](const AVCueGroup& group) {
+    overlay->setCueGroup(group);
+    EXPECT_EQ(input->submit(frame), EffectResult::Success);
+    EXPECT_EQ(engine->execute(), EffectResult::Success);
+    EXPECT_EQ(engine->flushAndWait(), EffectResult::Success);
+    EffectFrame metadata;
+    std::vector<uint8_t> readback;
+    EXPECT_TRUE(output->waitForFrame(&metadata, &readback));
+    return readback;
+  };
+
+  // Replacement: an opaque red cue becomes an opaque blue cue.
+  const auto red = render(AVCueGroup(std::vector<AVCue>{
+    makeFullFrameBitmapCue(255, 0, 0, 0)}));
+  ASSERT_EQ(red.size(), 4u * 4u * 4u);
+  // ReadbackOutputNode exposes RGBA bytes.
+  for (size_t i = 0; i < 4u * 4u; ++i) {
+    EXPECT_GE(red[i * 4 + 0], 245u);
+    EXPECT_LE(red[i * 4 + 2], 8u);
+  }
+  const auto blue = render(AVCueGroup(std::vector<AVCue>{
+    makeFullFrameBitmapCue(0, 0, 255, 0)}));
+  ASSERT_EQ(blue.size(), 4u * 4u * 4u);
+  for (size_t i = 0; i < 4u * 4u; ++i) {
+    EXPECT_GE(blue[i * 4 + 2], 245u);
+    EXPECT_LE(blue[i * 4 + 0], 8u);
+  }
+
+  // Overlay order: both cues are full-frame and opaque, so the higher z index must win.
+  const auto top = render(AVCueGroup(std::vector<AVCue>{
+    makeFullFrameBitmapCue(255, 0, 0, 0), makeFullFrameBitmapCue(0, 0, 255, 10)}));
+  ASSERT_EQ(top.size(), 4u * 4u * 4u);
+  for (size_t i = 0; i < 4u * 4u; ++i) {
+    EXPECT_GE(top[i * 4 + 2], 245u) << "the blue z=10 cue should cover the red z=0 cue";
+    EXPECT_LE(top[i * 4 + 0], 8u);
+  }
+  engine->stop();
 }
 
 } // namespace

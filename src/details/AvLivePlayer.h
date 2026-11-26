@@ -57,6 +57,7 @@ struct VideoEffectInput;
 
 class AvLivePlayer final : public Player,
                            public DefaultMediaClock::PlaybackParametersListener,
+                           public Renderer::VideoColorInfoListener,
                            public MediaPeriod::Callback,
                            public MediaPeriodHolder::Factory,
                            public MediaSourceListInfoRefreshListener,
@@ -106,7 +107,57 @@ public:
 
   void setVideoScalingMode(int mode) override;
 
+  void setVideoScaleMode(VideoScaleMode mode) override;
+
+  [[nodiscard]] VideoScaleMode getVideoScaleMode() const override {
+    return videoScaleMode.load(std::memory_order_relaxed);
+  }
+
+  void setVideoMirror(bool horizontal, bool vertical) override;
+
   void setTextOutput(const std::shared_ptr<TextOutput>& output) override;
+
+  [[nodiscard]] Tracks getCurrentTracks() const override;
+
+  [[nodiscard]] VideoFrameOutput getVideoFrameOutput() const override;
+
+  [[nodiscard]] VideoColorInfo getVideoColorInfo() const override;
+
+  [[nodiscard]] std::vector<Chapter> getChapters() const override;
+
+  [[nodiscard]] std::vector<AudioRendererStats> getAudioRendererStats() const override;
+
+  [[nodiscard]] uint64_t getAudioRendererSwitchCount() const override;
+
+  void setThumbnailProvider(std::shared_ptr<ThumbnailProvider> provider) override;
+
+  [[nodiscard]] std::shared_ptr<ThumbnailProvider> getThumbnailProvider() const override;
+
+  void requestThumbnail(int64_t positionUs, ThumbnailProvider::Callback callback) override;
+
+  void prefetchThumbnail(int64_t positionUs) override;
+
+  void prefetchThumbnails(int64_t startUs, int64_t endUs, int64_t stepUs) override;
+
+  void cancelThumbnailPrefetch() override;
+
+  void setPreferredAudioLanguage(const std::string& language) override;
+
+  [[nodiscard]] std::string getPreferredAudioLanguage() const override;
+
+  [[nodiscard]] std::string getPreferredTextLanguage() const override;
+
+  void setPreferredTextRoleFlags(int roleFlags) override;
+
+  [[nodiscard]] int getPreferredTextRoleFlags() const override;
+
+  void setSelectUndeterminedTextLanguage(bool select) override;
+
+  [[nodiscard]] bool getSelectUndeterminedTextLanguage() const override;
+
+  void selectTrack(int rendererIndex, int groupIndex, int trackIndex) override;
+
+  void clearTrackSelection(int rendererIndex) override;
 
   void setPreferredTextLanguage(const std::string& language, bool selectUndetermined) override;
 
@@ -162,6 +213,10 @@ public:
     return repeatMode;
   }
 
+  void setShuffleModeEnabled(bool enabled) override;
+
+  [[nodiscard]] bool getShuffleModeEnabled() const override;
+
   [[nodiscard]] bool isLoading() const override {
     return playbackInfo.isLoading;
   }
@@ -178,6 +233,19 @@ public:
 
   [[nodiscard]] int64_t getCurrentPositionUs() const override {
     return playbackInfo.positionUs;
+  }
+
+  [[nodiscard]] int64_t getBufferedPositionUs() const override {
+    return playbackInfo.bufferedPositionUs;
+  }
+
+  [[nodiscard]] std::vector<BufferedRange> getBufferedRanges() const override {
+    const auto positionUs = playbackInfo.positionUs;
+    const auto bufferedPositionUs = playbackInfo.bufferedPositionUs;
+    if (bufferedPositionUs > positionUs) {
+      return { BufferedRange { positionUs, bufferedPositionUs } };
+    }
+    return {};
   }
 
   int64_t getDurationUs() const override {
@@ -238,6 +306,18 @@ public:
 
   [[nodiscard]] const std::shared_ptr<MediaItem>& getMediaItemAt(int index) const override;
 
+  [[nodiscard]] int getCurrentMediaItemIndex() const override;
+
+  [[nodiscard]] int getNextMediaItemIndex() const override;
+
+  [[nodiscard]] int getPreviousMediaItemIndex() const override;
+
+  void seekToMediaItem(int index) override;
+
+  void seekToNextMediaItem() override;
+
+  void seekToPreviousMediaItem() override;
+
   void addMediaItems(int index,
     const std::vector<std::shared_ptr<MediaItem>>& mediaItems) override;
 
@@ -260,6 +340,8 @@ public:
    * the notification is posted to the playback thread.
    */
   void onVideoSizeChanged(int width, int height) override;
+
+  void onVideoColorInfoChanged(const VideoColorInfo& colorInfo) override;
 
   void onPlaybackParametersChanged(const Parameters& newParameters) override;
 
@@ -352,6 +434,9 @@ private:
 
   void seekToInternal(int64_t timeUs);
 
+  /** Seeks to a window on the playback thread; kTimeUnset selects its default position. */
+  void seekToWindowInternal(int windowIndex, int64_t timeUs = Definitions::kTimeUnset);
+
   /**
    * Applies {@code seekToDefaultPosition()} on the playback thread.
    *
@@ -377,7 +462,34 @@ private:
 
   void applyVideoEffectSurface(const std::shared_ptr<VideoSurface>& surface);
 
+  /** Runs on the engine's render thread after a frame; updates the UI hand-off sequence. */
+  void onVideoFrameRendered(std::shared_ptr<Fence> fence);
+
   void setVideoScalingModeInternal(const Message* msg);
+
+  void setVideoMirrorInternal(int flags);
+
+  void setVideoColorInfoInternal(const VideoColorInfo& colorInfo);
+
+  struct TrackSelectionRequest {
+    int rendererIndex = 0;
+    int groupIndex = 0;
+    int trackIndex = 0;
+  };
+
+  void selectTrackInternal(const TrackSelectionRequest& request);
+
+  void clearTrackSelectionInternal(int rendererIndex);
+
+  /** Builds the public snapshot from the selector's current mapping and result. */
+  [[nodiscard]] Tracks buildCurrentTracks() const;
+
+  /** Delivers the current snapshot to the listeners. */
+  void dispatchTracksChanged();
+
+  [[nodiscard]] std::vector<Chapter> buildChapters() const;
+
+  void dispatchChaptersChanged();
 
   void setMediaItemInternal(const std::shared_ptr<MediaSource>& mediaSource);
 
@@ -621,14 +733,25 @@ private:
   /** Guards the outputs, which the application thread sets and the playback thread reads. */
   mutable Mutex outputLock;
   std::shared_ptr<TextOutput> textOutput;
+  std::string preferredAudioLanguage;
   std::string preferredTextLanguage;
   bool selectUndeterminedTextLanguage = true;
+  int preferredTextRoleFlags = 0;
   std::atomic<bool> subtitlesEnabled{true};
   std::shared_ptr<MetadataOutput> metadataOutput;
   /** The renderer of the application, before the subtitle overlay wraps it. */
   /** The last cue group delivered, so the effect pipeline can be enabled after it. */
   AVCueGroup currentCueGroup;
+  VideoFrameOutput videoFrameOutput;
+  VideoColorInfo videoColorInfo;
+  std::vector<Chapter> chapters;
+  std::shared_ptr<ThumbnailProvider> thumbnailProvider;
+  int activeAudioRendererIndex = -1;
+  uint64_t audioRendererSwitchCount = 0;
+  std::shared_ptr<Renderer::VideoColorInfoListener> videoColorInfoListenerRef;
+  std::atomic<int64_t> pendingVideoFramePositionUs { 0 };
   std::atomic<SubtitleRenderMode> subtitleRenderMode{ SubtitleRenderMode::kAuto };
+  std::atomic<VideoScaleMode> videoScaleMode{ VideoScaleMode::Fit };
   std::vector<std::shared_ptr<SelectionCapabilities>> rendererCapabilities;
   std::shared_ptr<TrackSelector> trackSelector;
   std::shared_ptr<TrackSelectorResult> emptyTrackSelectorResult;
@@ -716,6 +839,15 @@ private:
 
   /** Has no data: resumes the playback, restarting an ended player from the default position. */
   static constexpr int MSG_PLAY = 27;
+  static constexpr int MSG_SELECT_TRACK = 28;
+  static constexpr int MSG_CLEAR_TRACK_SELECTION = 29;
+  static constexpr int MSG_SET_VIDEO_MIRROR = 30;
+  static constexpr int MSG_VIDEO_COLOR_INFO_CHANGED = 31;
+  static constexpr int MSG_SET_PREFERRED_AUDIO_LANGUAGE = 32;
+  static constexpr int MSG_SEEK_TO_MEDIA_ITEM = 33;
+  static constexpr int MSG_SEEK_TO_NEXT_MEDIA_ITEM = 34;
+  static constexpr int MSG_SEEK_TO_PREVIOUS_MEDIA_ITEM = 35;
+  static constexpr int MSG_SET_SHUFFLE_MODE = 36;
 
   static constexpr int64_t ACTIVE_INTERVAL_MS = 10;
   static constexpr int64_t IDLE_INTERVAL_MS = 1000;

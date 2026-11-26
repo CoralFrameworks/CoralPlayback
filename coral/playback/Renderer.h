@@ -18,6 +18,7 @@
 #define CORAL_PLAYBACK_RENDERER_H
 
 #include <coral/playback/MediaClock.h>
+#include <coral/playback/VideoColorInfo.h>
 #include <coral/selection/Configuration.h>
 #include <coral/selection/SelectionCapabilities.h>
 #include <coral/selection/TrackSelection.h>
@@ -87,6 +88,14 @@ public:
     virtual void onVideoSizeChanged(int width, int height) = 0;
   };
 
+  /** Receives the colour description of the video the renderer decodes. */
+  class VideoColorInfoListener {
+  public:
+    virtual ~VideoColorInfoListener() = default;
+
+    virtual void onVideoColorInfoChanged(const VideoColorInfo& colorInfo) = 0;
+  };
+
   /**
    * The type of a message that can be passed to an audio renderer
    */
@@ -126,6 +135,16 @@ public:
    * @param listener The listener, or null to stop reporting the size.
    */
   virtual void setVideoSizeListener(const std::shared_ptr<VideoSizeListener>& listener) {};
+
+  /**
+   * Sets the listener that receives the colour metadata of the decoded video, or clears it.
+   *
+   * <p>Called on the player's thread. A renderer that does not decode video ignores it.
+   */
+  virtual void setVideoColorInfoListener(
+      const std::shared_ptr<VideoColorInfoListener>& listener) {
+    static_cast<void>(listener);
+  }
 
   /**
    * Sets the index of this renderer within the player.

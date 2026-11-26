@@ -16,6 +16,7 @@
 #include "AvLivePlayer.h"
 
 #include "CpuVideoFrameSink.h"
+#include "DecodeAudioRenderer.h"
 #include "DecodeVideoRenderer.h"
 #include "ImageRenderer.h"
 #include "MetadataRenderer.h"
@@ -39,7 +40,13 @@
 #include "PlaylistTimeline.h"
 #include "TraceUtil.h"
 
+#include <coral/selection/DefaultParameters.h>
 #include <coral/selection/DefaultTrackSelector.h>
+
+#include <media/MetadataEntries.h>
+#include <coral/selection/MappingTrackSelector.h>
+#include <coral/selection/SelectionCapabilities.h>
+#include <coral/selection/SelectionOverride.h>
 #include <core/time/SystemClock.h>
 #include <coral/upstream/DefaultBandwidthMeter.h>
 
@@ -89,6 +96,17 @@ AvLivePlayer::AvLivePlayer(const std::vector<std::shared_ptr<Renderer>>& rendere
       textRenderer = std::move(text);
       // The renderer calls this from the playback thread, which is where its render is called.
       textRenderer->setCueListener([this](const AVCueGroup& group) {
+        // A side-loaded subtitle file replaces the cues of the embedded text track. Both sources
+        // dispatch through here, and the embedded track reports an empty group at every position it
+        // has no cue for; letting that through would clear the side-loaded cue between two of its
+        // own deliveries, so the burned-in subtitle flickers (or never makes it into a frame). The
+        // external timeline is dispatched by `doSomeWork` instead.
+        {
+          std::lock_guard<std::mutex> lock(externalMutex);
+          if (externalTimeline != nullptr) {
+            return;
+          }
+        }
         dispatchCueGroup(group);
       });
     } else if (auto metadata = std::dynamic_pointer_cast<MetadataRenderer>(renderers[i]);
@@ -130,10 +148,30 @@ AvLivePlayer::AvLivePlayer(const std::vector<std::shared_ptr<Renderer>>& rendere
   });
   msgHandler = EventHandler::create(msgThread->getLooper(), callbackRef);
 
+  // A player built with several audio renderers prepares them all, but only one may be enabled at a
+  // time; otherwise the selector would select an audio track for every renderer and all of them would
+  // output together. Keep the first and disable the rest until selectTrack() names another one.
+  if (auto selector = std::dynamic_pointer_cast<DefaultTrackSelector>(trackSelector);
+      selector != nullptr) {
+    bool firstAudio = true;
+    for (size_t index = 0; index < renderers.size(); ++index) {
+      if (renderers[index] != nullptr && renderers[index]->getMediaType() == MediaType::kMediaTypeAudio) {
+        if (firstAudio) {
+          firstAudio = false;
+        } else {
+          selector->setRendererDisabled(static_cast<int>(index), true);
+        }
+      }
+    }
+  }
+
   // The renderers hold a reference to this player as their video size listener. It is non-owning for
   // the same reason as `callbackRef`: the player belongs to its caller.
   videoSizeListenerRef = std::shared_ptr<VideoSizeListener>(this, [](VideoSizeListener*) {
   });
+  videoColorInfoListenerRef = std::shared_ptr<VideoColorInfoListener>(this,
+    [](VideoColorInfoListener*) {
+    });
 
   // The events the application listens to are delivered on the thread it created the player on,
   // which is where ExoPlayer's listener handler lives too. A thread without a looper, e.g. a test
@@ -204,6 +242,12 @@ void AvLivePlayer::enableVideoEffectPipeline(const std::shared_ptr<VideoOutputNo
   config.sharedContext = resolved.sharedContext;
 
   effectEngine = EffectEngine::create(config);
+  if (effectEngine != nullptr) {
+    effectEngine->setOnFrameSubmitted(
+      [this](backend::Device&, std::shared_ptr<Fence> fence) {
+        onVideoFrameRendered(std::move(fence));
+      });
+  }
   const std::shared_ptr<EffectInputNode> graphInput = resolved.inputNode;
   const std::shared_ptr<NullOutputNode> nullOutput = NullOutputNode::create();
   if (effectEngine == nullptr || graphInput == nullptr || nullOutput == nullptr) {
@@ -456,7 +500,35 @@ void AvLivePlayer::setOutputSurface(const std::shared_ptr<VideoSurface>& surface
 }
 
 void AvLivePlayer::setVideoScalingMode(int mode) {
+  if (mode == 2) {
+    videoScaleMode.store(VideoScaleMode::Fill, std::memory_order_relaxed);
+  } else if (mode == 3) {
+    videoScaleMode.store(VideoScaleMode::Stretch, std::memory_order_relaxed);
+  } else {
+    videoScaleMode.store(VideoScaleMode::Fit, std::memory_order_relaxed);
+  }
   msgHandler->sendMessage(Message::obtain(msgHandler, MSG_SET_VIDEO_SCALE_MODE, WrapMessageData(mode)));
+}
+
+void AvLivePlayer::setVideoScaleMode(const VideoScaleMode mode) {
+  videoScaleMode.store(mode, std::memory_order_relaxed);
+  const int platformMode = mode == VideoScaleMode::Fill ? 2 : (mode == VideoScaleMode::Stretch ? 3 : 1);
+  msgHandler->sendMessage(Message::obtain(msgHandler, MSG_SET_VIDEO_SCALE_MODE,
+    WrapMessageData(platformMode)));
+}
+
+void AvLivePlayer::setVideoMirror(const bool horizontal, const bool vertical) {
+  const int flags = (horizontal ? 1 : 0) | (vertical ? 2 : 0);
+  msgHandler->sendMessage(Message::obtain(msgHandler, MSG_SET_VIDEO_MIRROR, flags, 0));
+}
+
+void AvLivePlayer::setVideoMirrorInternal(const int flags) {
+  if (videoEffectGraph == nullptr) {
+    return;
+  }
+  if (videoEffectGraph->setVideoMirror((flags & 1) != 0, (flags & 2) != 0) != EffectResult::Success) {
+    MINILOG_WARN("could not set the effect mirror mode");
+  }
 }
 
 void AvLivePlayer::setMediaItem(const std::shared_ptr<MediaItem>& mediaItem) {
@@ -466,6 +538,15 @@ void AvLivePlayer::setMediaItem(const std::shared_ptr<MediaItem>& mediaItem) {
                           ? mediaSourceFactory
                           : std::make_shared<DefaultMediaSourceFactory>();
   setMediaSource(factory->createMediaSource(mediaItem));
+}
+
+void AvLivePlayer::setShuffleModeEnabled(const bool enabled) {
+  msgHandler->sendMessage(
+    Message::obtain(msgHandler, MSG_SET_SHUFFLE_MODE, WrapMessageData(enabled)));
+}
+
+bool AvLivePlayer::getShuffleModeEnabled() const {
+  return shuffleModeEnabled;
 }
 
 void AvLivePlayer::setRepeatMode(const RepeatMode mode) {
@@ -554,6 +635,33 @@ int AvLivePlayer::getMediaItemCount() const {
   return playbackInfo.timeline != nullptr ? playbackInfo.timeline->getWindowCount() : 0;
 }
 
+int AvLivePlayer::getCurrentMediaItemIndex() const {
+  if (playbackInfo.timeline == nullptr || playbackInfo.timeline->isEmpty()) {
+    return 0;
+  }
+  auto period = std::make_shared<Timeline::Period>();
+  if (!playbackInfo.timeline->getPeriodByUid(playbackInfo.periodId.periodUid(), period)) {
+    return 0;
+  }
+  return period->windowIndex;
+}
+
+int AvLivePlayer::getNextMediaItemIndex() const {
+  if (playbackInfo.timeline == nullptr || playbackInfo.timeline->isEmpty()) {
+    return Definitions::kIndexUnset;
+  }
+  return playbackInfo.timeline->getNextWindowIndex(getCurrentMediaItemIndex(), repeatMode,
+    shuffleModeEnabled);
+}
+
+int AvLivePlayer::getPreviousMediaItemIndex() const {
+  if (playbackInfo.timeline == nullptr || playbackInfo.timeline->isEmpty()) {
+    return Definitions::kIndexUnset;
+  }
+  return playbackInfo.timeline->getPreviousWindowIndex(getCurrentMediaItemIndex(), repeatMode,
+    shuffleModeEnabled);
+}
+
 const std::shared_ptr<MediaItem>& AvLivePlayer::getMediaItemAt(const int index) const {
   static const std::shared_ptr<MediaItem> sEmptyItem = nullptr;
   if (playbackInfo.timeline == nullptr ||
@@ -566,6 +674,19 @@ const std::shared_ptr<MediaItem>& AvLivePlayer::getMediaItemAt(const int index) 
   const auto timelineWindow =
     playbackInfo.timeline->getWindow(index, std::make_shared<Timeline::Window>(), 0);
   return timelineWindow != nullptr ? timelineWindow->mediaItem : sEmptyItem;
+}
+
+void AvLivePlayer::seekToMediaItem(const int index) {
+  msgHandler->sendMessage(
+    Message::obtain(msgHandler, MSG_SEEK_TO_MEDIA_ITEM, WrapMessageData(index)));
+}
+
+void AvLivePlayer::seekToNextMediaItem() {
+  msgHandler->sendEmptyMessage(MSG_SEEK_TO_NEXT_MEDIA_ITEM);
+}
+
+void AvLivePlayer::seekToPreviousMediaItem() {
+  msgHandler->sendEmptyMessage(MSG_SEEK_TO_PREVIOUS_MEDIA_ITEM);
 }
 
 void AvLivePlayer::addMediaItems(int index,
@@ -705,6 +826,14 @@ void AvLivePlayer::stop() {
 }
 
 void AvLivePlayer::release() {
+  std::shared_ptr<ThumbnailProvider> provider;
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    provider = std::move(thumbnailProvider);
+  }
+  if (provider != nullptr) {
+    provider->cancel();
+  }
 
   if (released || !msgThread || !msgThread->isAlive()) {
     return;
@@ -741,12 +870,19 @@ void AvLivePlayer::seekToDefaultPositionInternal() {
 }
 
 void AvLivePlayer::seekToInternal(const int64_t timeUs) {
-  // The player holds a single-item playlist, so a seek always targets the first window.
-  pendingInitialSeekPosition = SeekPosition(playbackInfo.timeline, 0, timeUs);
-  if (playbackInfo.timeline->isEmpty()) {
+  seekToWindowInternal(getCurrentMediaItemIndex(), timeUs);
+}
+
+void AvLivePlayer::seekToWindowInternal(const int windowIndex, const int64_t timeUs) {
+  if (playbackInfo.timeline == nullptr || playbackInfo.timeline->isEmpty()) {
     // Nothing to resolve yet: the pending seek is resolved as soon as the timeline is available.
+    pendingInitialSeekPosition = SeekPosition(playbackInfo.timeline, windowIndex, timeUs);
     return;
   }
+  if (windowIndex < 0 || windowIndex >= playbackInfo.timeline->getWindowCount()) {
+    return;
+  }
+  pendingInitialSeekPosition = SeekPosition(playbackInfo.timeline, windowIndex, timeUs);
   // Re-resolving the playlist change with the pending seek position applies the seek: it resolves
   // the position in the timeline, seeks the media period and resets the renderer positions.
   handleMediaSourceListInfoRefreshed(mediaSourceList->createTimeline());
@@ -811,6 +947,26 @@ void AvLivePlayer::onVideoSizeChanged(const int width, const int height) {
     msgHandler->sendMessage(Message::obtain(msgHandler, MSG_VIDEO_SIZE_CHANGED,
       width, height));
   }
+}
+
+void AvLivePlayer::onVideoColorInfoChanged(const VideoColorInfo& colorInfo) {
+  if (msgHandler != nullptr) {
+    msgHandler->sendMessage(Message::obtain(msgHandler, MSG_VIDEO_COLOR_INFO_CHANGED,
+      WrapMessageData(colorInfo)));
+  }
+}
+
+void AvLivePlayer::setVideoColorInfoInternal(const VideoColorInfo& colorInfo) {
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    videoColorInfo = colorInfo;
+    // A UI may read the frame snapshot immediately after this event; do not wait for the next render
+    // tick to attach the colour description.
+    videoFrameOutput.colorInfo = colorInfo;
+  }
+  dispatchPlayerEvent([colorInfo](EventListener& listener) {
+    listener.onVideoColorInfoChanged(colorInfo);
+  });
 }
 
 void AvLivePlayer::setVideoSizeInternal(const int width, const int height) {
@@ -883,6 +1039,25 @@ bool AvLivePlayer::handleMessage(Message* msg) {
       seekToDefaultPositionInternal();
       break;
     }
+    case MSG_SEEK_TO_MEDIA_ITEM: {
+      const int index = UseMessageData<int>(msg->msgData);
+      seekToWindowInternal(index, Definitions::kTimeUnset);
+      break;
+    }
+    case MSG_SEEK_TO_NEXT_MEDIA_ITEM: {
+      const int next = getNextMediaItemIndex();
+      if (next != Definitions::kIndexUnset) {
+        seekToWindowInternal(next, Definitions::kTimeUnset);
+      }
+      break;
+    }
+    case MSG_SEEK_TO_PREVIOUS_MEDIA_ITEM: {
+      const int previous = getPreviousMediaItemIndex();
+      if (previous != Definitions::kIndexUnset) {
+        seekToWindowInternal(previous, Definitions::kTimeUnset);
+      }
+      break;
+    }
     case MSG_PLAY: {
       playInternal();
       break;
@@ -911,19 +1086,52 @@ bool AvLivePlayer::handleMessage(Message* msg) {
       reselectTracksInternal();
       break;
     }
+    case MSG_SET_PREFERRED_AUDIO_LANGUAGE: {
+      std::string language;
+      {
+        const std::lock_guard<Mutex> lock(outputLock);
+        language = preferredAudioLanguage;
+      }
+      if (const auto selector = std::dynamic_pointer_cast<DefaultTrackSelector>(trackSelector);
+          selector != nullptr) {
+        ParametersBuilder builder(selector->getParameters());
+        builder.setPreferredAudioLanguage(language);
+        selector->setParameters(builder.build());
+      }
+      break;
+    }
+    case MSG_VIDEO_COLOR_INFO_CHANGED: {
+      setVideoColorInfoInternal(UseMessageData<VideoColorInfo>(msg->msgData));
+      break;
+    }
+    case MSG_SET_VIDEO_MIRROR: {
+      setVideoMirrorInternal(msg->arg1);
+      break;
+    }
+    case MSG_SELECT_TRACK: {
+      selectTrackInternal(UseMessageData<TrackSelectionRequest>(msg->msgData));
+      break;
+    }
+    case MSG_CLEAR_TRACK_SELECTION: {
+      clearTrackSelectionInternal(UseMessageData<int>(msg->msgData));
+      break;
+    }
     case MSG_SET_PREFERRED_TEXT_LANGUAGE: {
       std::string language;
       bool selectUndetermined = true;
+      int roleFlags = 0;
       {
         std::lock_guard<Mutex> lock(outputLock);
         language = preferredTextLanguage;
         selectUndetermined = selectUndeterminedTextLanguage;
+        roleFlags = preferredTextRoleFlags;
       }
       if (auto selector = std::dynamic_pointer_cast<DefaultTrackSelector>(trackSelector);
           selector != nullptr) {
         auto parameters = selector->getParameters();
         parameters.preferredTextLanguage = language;
         parameters.selectUndeterminedTextLanguage = selectUndetermined;
+        parameters.preferredTextRoleFlags = roleFlags;
         selector->setParameters(parameters);
       }
       // Queue the reselection after any seek that is already queued: the seek must apply the new
@@ -944,6 +1152,16 @@ bool AvLivePlayer::handleMessage(Message* msg) {
     case MSG_REMOVE_MEDIA_SOURCE_EVENT_LISTENER: {
       handleRemoveMediaSourceEventListener(
         UseSharedMsgData<MediaSourceEventListener>(msg->msgData));
+      break;
+    }
+    case MSG_SET_SHUFFLE_MODE: {
+      const bool enabled = UseMessageData<bool>(msg->msgData);
+      if (shuffleModeEnabled != enabled) {
+        shuffleModeEnabled = enabled;
+        dispatchPlayerEvent([enabled](EventListener& listener) {
+          listener.onShuffleModeEnabledChanged(enabled);
+        });
+      }
       break;
     }
     case MSG_SET_REPEAT_MODE: {
@@ -1178,7 +1396,9 @@ void AvLivePlayer::doSomeWork() {
   }
   if (external != nullptr) {
     const AVCueGroup group = external->cuesAt(getCurrentPositionUs());
-    if (group != lastExternalGroup) {
+    // The presentation time of an empty group moves with the clock while the screen stays clear, so
+    // compare the cues: the graph only needs a new group when the pictures or texts change.
+    if (group.getCues() != lastExternalGroup.getCues()) {
       lastExternalGroup = group;
       dispatchCueGroup(group);
     }
@@ -1263,8 +1483,17 @@ void AvLivePlayer::doSomeWork() {
     setPlayWhenReadyInternal(false);
   }
   if (finishedRendering && playingPeriodHolder->info.isFinal) {
-    setState(State::STATE_ENDED);
-    stopRenderers();
+    // Ending playback is only correct when repetition is off: `REPEAT_MODE_ONE` starts the current
+    // item again and `REPEAT_MODE_ALL` advances to the next window, wrapping to the first.
+    if (repeatMode == RepeatMode::REPEAT_MODE_ONE) {
+      seekToInternal(Definitions::kTimeUnset);
+    } else if (repeatMode == RepeatMode::REPEAT_MODE_ALL &&
+               getNextMediaItemIndex() != Definitions::kIndexUnset) {
+      seekToWindowInternal(getNextMediaItemIndex(), Definitions::kTimeUnset);
+    } else {
+      setState(State::STATE_ENDED);
+      stopRenderers();
+    }
   } else if (playbackInfo.playbackState == State::STATE_BUFFERING &&
              shouldTransitionToReadyState(renderersAllowPlayback)) {
     setState(State::STATE_READY);
@@ -1478,9 +1707,10 @@ void AvLivePlayer::applyVideoEffectSurface(const std::shared_ptr<VideoSurface>& 
 void AvLivePlayer::setVideoScalingModeInternal(const Message* msg) {
   if (videoEffectGraph != nullptr) {
     const int mode = UseMessageData<int>(msg->msgData);
-    // Android's SCALE_TO_FIT_WITH_CROPPING is 2; everything else is the fit mode. The constants
-    // live in the platform MediaCodec headers, which the playback core does not include.
-    const EffectScaleMode scaleMode = mode == 2 ? EffectScaleMode::Crop : EffectScaleMode::Fit;
+    // Android's SCALE_TO_FIT_WITH_CROPPING is 2; 3 is this player's stretch extension. The
+    // platform constants live in the MediaCodec headers, which the playback core does not include.
+    const EffectScaleMode scaleMode = mode == 2 ? EffectScaleMode::Crop
+      : (mode == 3 ? EffectScaleMode::Stretch : EffectScaleMode::Fit);
     if (videoEffectGraph->setScaleMode(scaleMode) != EffectResult::Success) {
       MINILOG_WARN("could not set the effect layout mode");
     }
@@ -1491,6 +1721,353 @@ void AvLivePlayer::setVideoScalingModeInternal(const Message* msg) {
       renderer->handleMessage(Renderer::MSG_SET_SCALING_MODE, msg);
     }
   }
+}
+
+Tracks AvLivePlayer::getCurrentTracks() const {
+  return buildCurrentTracks();
+}
+
+VideoFrameOutput AvLivePlayer::getVideoFrameOutput() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return videoFrameOutput;
+}
+
+VideoColorInfo AvLivePlayer::getVideoColorInfo() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return videoColorInfo;
+}
+
+std::vector<Chapter> AvLivePlayer::getChapters() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return chapters;
+}
+
+std::vector<AudioRendererStats> AvLivePlayer::getAudioRendererStats() const {
+  std::vector<AudioRendererStats> result;
+  for (size_t index = 0; index < renderers.size(); ++index) {
+    const auto renderer = std::dynamic_pointer_cast<DecodeAudioRenderer>(renderers[index]);
+    if (renderer == nullptr) {
+      continue;
+    }
+    auto stats = renderer->getRenderStats();
+    stats.rendererIndex = static_cast<int>(index);
+    stats.enabled = isRendererEnabled(renderers[index]);
+    result.push_back(std::move(stats));
+  }
+  return result;
+}
+
+uint64_t AvLivePlayer::getAudioRendererSwitchCount() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return audioRendererSwitchCount;
+}
+
+void AvLivePlayer::setThumbnailProvider(std::shared_ptr<ThumbnailProvider> provider) {
+  std::shared_ptr<ThumbnailProvider> previous;
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    previous = std::move(thumbnailProvider);
+    thumbnailProvider = std::move(provider);
+  }
+  if (previous != nullptr) {
+    previous->cancel();
+  }
+}
+
+std::shared_ptr<ThumbnailProvider> AvLivePlayer::getThumbnailProvider() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return thumbnailProvider;
+}
+
+void AvLivePlayer::setPreferredAudioLanguage(const std::string& language) {
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    preferredAudioLanguage = language;
+  }
+  // The track selector belongs to the playback thread; apply the preference there.
+  if (msgHandler != nullptr) {
+    msgHandler->sendEmptyMessage(MSG_SET_PREFERRED_AUDIO_LANGUAGE);
+  }
+}
+
+std::string AvLivePlayer::getPreferredAudioLanguage() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return preferredAudioLanguage;
+}
+
+std::string AvLivePlayer::getPreferredTextLanguage() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return preferredTextLanguage;
+}
+
+void AvLivePlayer::setPreferredTextRoleFlags(const int roleFlags) {
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    preferredTextRoleFlags = roleFlags;
+  }
+  if (msgHandler != nullptr) {
+    msgHandler->sendEmptyMessage(MSG_SET_PREFERRED_TEXT_LANGUAGE);
+  }
+}
+
+int AvLivePlayer::getPreferredTextRoleFlags() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return preferredTextRoleFlags;
+}
+
+void AvLivePlayer::setSelectUndeterminedTextLanguage(const bool select) {
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    selectUndeterminedTextLanguage = select;
+  }
+  if (msgHandler != nullptr) {
+    msgHandler->sendEmptyMessage(MSG_SET_PREFERRED_TEXT_LANGUAGE);
+  }
+}
+
+bool AvLivePlayer::getSelectUndeterminedTextLanguage() const {
+  const std::lock_guard<Mutex> lock(outputLock);
+  return selectUndeterminedTextLanguage;
+}
+
+void AvLivePlayer::requestThumbnail(const int64_t positionUs, ThumbnailProvider::Callback callback) {
+  std::shared_ptr<ThumbnailProvider> provider;
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    provider = thumbnailProvider;
+  }
+  if (provider != nullptr) {
+    provider->requestThumbnail(positionUs, std::move(callback));
+  }
+}
+
+void AvLivePlayer::prefetchThumbnail(const int64_t positionUs) {
+  std::shared_ptr<ThumbnailProvider> provider;
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    provider = thumbnailProvider;
+  }
+  if (provider != nullptr) {
+    provider->prefetch(positionUs);
+  }
+}
+
+void AvLivePlayer::cancelThumbnailPrefetch() {
+  std::shared_ptr<ThumbnailProvider> provider;
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    provider = thumbnailProvider;
+  }
+  if (provider != nullptr) {
+    provider->cancelPrefetch();
+  }
+}
+
+void AvLivePlayer::prefetchThumbnails(const int64_t startUs, const int64_t endUs,
+                                      const int64_t stepUs) {
+  if (startUs < 0 || endUs <= startUs || stepUs <= 0) {
+    return;
+  }
+  std::shared_ptr<ThumbnailProvider> provider;
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    provider = thumbnailProvider;
+  }
+  if (provider == nullptr) {
+    return;
+  }
+  constexpr int kMaxPrefetchPositions = 64;
+  int count = 0;
+  for (int64_t positionUs = startUs; positionUs < endUs && count < kMaxPrefetchPositions;
+       positionUs += stepUs, ++count) {
+    provider->prefetch(positionUs);
+  }
+}
+
+void AvLivePlayer::onVideoFrameRendered(std::shared_ptr<Fence> fence) {
+  const auto positionUs = pendingVideoFramePositionUs.load(std::memory_order_relaxed);
+  const std::lock_guard<Mutex> lock(outputLock);
+  videoFrameOutput.surface = pendingOutputSurface;
+  videoFrameOutput.positionUs = positionUs;
+  videoFrameOutput.fence = std::move(fence);
+  videoFrameOutput.colorInfo = videoColorInfo;
+  ++videoFrameOutput.sequence;
+}
+
+void AvLivePlayer::selectTrack(const int rendererIndex, const int groupIndex, const int trackIndex) {
+  TrackSelectionRequest request;
+  request.rendererIndex = rendererIndex;
+  request.groupIndex = groupIndex;
+  request.trackIndex = trackIndex;
+  msgHandler->sendMessage(Message::obtain(msgHandler, MSG_SELECT_TRACK, WrapMessageData(request)));
+}
+
+void AvLivePlayer::clearTrackSelection(const int rendererIndex) {
+  msgHandler->sendMessage(Message::obtain(msgHandler, MSG_CLEAR_TRACK_SELECTION,
+    WrapMessageData(rendererIndex)));
+}
+
+void AvLivePlayer::selectTrackInternal(const TrackSelectionRequest& request) {
+  const auto selector = std::dynamic_pointer_cast<DefaultTrackSelector>(trackSelector);
+  if (selector == nullptr || request.rendererIndex < 0 ||
+      request.rendererIndex >= static_cast<int>(renderers.size())) {
+    return;
+  }
+  const auto mapped = selector->getCurrentMappedTrackInfo();
+  if (mapped == nullptr) {
+    return;
+  }
+  const auto groups = mapped->getTrackGroups(request.rendererIndex);
+  if (groups == nullptr || request.groupIndex < 0 || request.groupIndex >= groups->length()) {
+    return;
+  }
+  const auto group = groups->get(request.groupIndex);
+  if (group == nullptr || request.trackIndex < 0 || request.trackIndex >= group->length()) {
+    return;
+  }
+  // An explicit audio selection also chooses which audio renderer is active. Install the override
+  // and enable the target before disabling its siblings: a disable-first order leaves a window in
+  // which no audio renderer is enabled, which is audible as a gap. The target is selected when it
+  // becomes enabled, and the old renderer is disabled immediately after it.
+  const bool audioTarget =
+    request.rendererIndex >= 0 && request.rendererIndex < static_cast<int>(renderers.size()) &&
+    renderers[request.rendererIndex] != nullptr &&
+    renderers[request.rendererIndex]->getMediaType() == MediaType::kMediaTypeAudio;
+  selector->setSelectionOverride(request.rendererIndex,
+    SelectionOverride(request.groupIndex, request.trackIndex));
+  if (audioTarget) {
+    {
+      const std::lock_guard<Mutex> lock(outputLock);
+      if (activeAudioRendererIndex != request.rendererIndex) {
+        activeAudioRendererIndex = request.rendererIndex;
+        ++audioRendererSwitchCount;
+      }
+    }
+    selector->setRendererDisabled(request.rendererIndex, false);
+    for (size_t index = 0; index < renderers.size(); ++index) {
+      if (renderers[index] != nullptr &&
+          renderers[index]->getMediaType() == MediaType::kMediaTypeAudio &&
+          static_cast<int>(index) != request.rendererIndex) {
+        selector->setRendererDisabled(static_cast<int>(index), true);
+      }
+    }
+  }
+}
+
+void AvLivePlayer::clearTrackSelectionInternal(const int rendererIndex) {
+  const auto selector = std::dynamic_pointer_cast<DefaultTrackSelector>(trackSelector);
+  if (selector == nullptr || rendererIndex < 0 ||
+      rendererIndex >= static_cast<int>(renderers.size())) {
+    return;
+  }
+  selector->setSelectionOverride(rendererIndex, std::nullopt);
+}
+
+Tracks AvLivePlayer::buildCurrentTracks() const {
+  Tracks tracks;
+  const auto selector = std::dynamic_pointer_cast<MappingTrackSelector>(trackSelector);
+  if (selector == nullptr) {
+    return tracks;
+  }
+  const auto mapped = selector->getCurrentMappedTrackInfo();
+  if (mapped == nullptr) {
+    return tracks;
+  }
+  const auto result = playbackInfo.trackSelectorResult;
+  for (int rendererIndex = 0; rendererIndex < mapped->getRendererCount(); ++rendererIndex) {
+    const auto groups = mapped->getTrackGroups(rendererIndex);
+    if (groups == nullptr) {
+      continue;
+    }
+    const auto selection = result != nullptr ? result->getSelection(rendererIndex) : nullptr;
+    const auto type = trackTypeOf(mapped->getRendererType(rendererIndex));
+    for (int groupIndex = 0; groupIndex < groups->length(); ++groupIndex) {
+      const auto group = groups->get(groupIndex);
+      if (group == nullptr) {
+        continue;
+      }
+      TrackGroupInfo groupInfo;
+      groupInfo.type = type;
+      groupInfo.rendererIndex = rendererIndex;
+      groupInfo.groupIndex = groupIndex;
+      for (int trackIndex = 0; trackIndex < group->length(); ++trackIndex) {
+        Track track;
+        track.type = type;
+        track.rendererIndex = rendererIndex;
+        track.groupIndex = groupIndex;
+        track.trackIndex = trackIndex;
+        track.format = group->getFormat(trackIndex);
+        track.supported = mapped->getTrackSupport(rendererIndex, groupIndex, trackIndex) ==
+                          SelectionCapabilities::FORMAT_HANDLED;
+        track.selected = selection != nullptr && selection->getTrackGroup() == group &&
+                         selection->indexOf(trackIndex) != Definitions::kIndexUnset;
+        groupInfo.selected = groupInfo.selected || track.selected;
+        groupInfo.tracks.push_back(std::move(track));
+      }
+      tracks.groups.push_back(std::move(groupInfo));
+    }
+  }
+  return tracks;
+}
+
+void AvLivePlayer::dispatchTracksChanged() {
+  const Tracks tracks = buildCurrentTracks();
+  dispatchPlayerEvent([tracks](EventListener& listener) { listener.onTracksChanged(tracks); });
+}
+
+std::vector<Chapter> AvLivePlayer::buildChapters() const {
+  std::vector<Chapter> result;
+  std::shared_ptr<Metadata> metadata;
+  for (const auto& group : buildCurrentTracks().groups) {
+    for (const auto& track : group.tracks) {
+      if (track.format != nullptr && track.format->getMetadata() != nullptr) {
+        metadata = track.format->getMetadata();
+        break;
+      }
+    }
+    if (metadata != nullptr) {
+      break;
+    }
+  }
+  if (metadata == nullptr) {
+    return result;
+  }
+  for (const auto& entry : metadata->getEntries()) {
+    if (entry == nullptr) {
+      continue;
+    }
+    if (const auto* quickTime = dynamic_cast<const Mp4ChaptersData*>(entry.get());
+        quickTime != nullptr) {
+      for (const auto& chapter : quickTime->getChapters()) {
+        result.push_back(Chapter{ chapter.getTimeUs(), chapter.getTimeUs(), chapter.getTitle() });
+      }
+    } else if (const auto* generic = dynamic_cast<const ChapterMetadataEntry*>(entry.get());
+               generic != nullptr) {
+      result.push_back(Chapter{ generic->getTimeUs(), generic->getTimeUs(), generic->getTitle() });
+    }
+  }
+  std::sort(result.begin(), result.end(),
+    [](const Chapter& lhs, const Chapter& rhs) { return lhs.startUs < rhs.startUs; });
+  result.erase(std::unique(result.begin(), result.end(),
+    [](const Chapter& lhs, const Chapter& rhs) {
+      return lhs.startUs == rhs.startUs && lhs.title == rhs.title;
+    }), result.end());
+  const auto durationUs = getDurationUs();
+  for (size_t index = 0; index < result.size(); ++index) {
+    result[index].endUs = index + 1 < result.size()
+      ? result[index + 1].startUs
+      : (durationUs > result[index].startUs ? durationUs : result[index].startUs);
+  }
+  return result;
+}
+
+void AvLivePlayer::dispatchChaptersChanged() {
+  const auto next = buildChapters();
+  {
+    const std::lock_guard<Mutex> lock(outputLock);
+    chapters = next;
+  }
+  dispatchPlayerEvent([next](EventListener& listener) { listener.onChaptersChanged(next); });
 }
 
 void AvLivePlayer::setMediaItemInternal(const std::shared_ptr<MediaSource>& mediaSource) {
@@ -1985,6 +2562,8 @@ void AvLivePlayer::handlePeriodPrepared(const std::shared_ptr<MediaPeriod>& medi
         playbackInfo.requestedContentPositionUs);
   }
   maybeContinueLoading();
+  dispatchTracksChanged();
+  dispatchChaptersChanged();
 }
 
 void AvLivePlayer::handleContinueLoadingRequested(const std::shared_ptr<MediaPeriod>& mediaPeriod) {
@@ -2194,6 +2773,7 @@ void AvLivePlayer::enableRenderer(const size_t rendererIndex, const bool wasRend
   // The size of the video is read from the renderer, which reports it as soon as it decodes a frame
   // and remembers the last one it reported.
   renderer->setVideoSizeListener(videoSizeListenerRef);
+  renderer->setVideoColorInfoListener(videoColorInfoListenerRef);
   // Update the media clock enabled renderer
   mediaClock->onRendererEnabled(renderer);
   // Start the renderer if playing.
@@ -2327,6 +2907,8 @@ void AvLivePlayer::reselectTracksInternal() {
     updatePlaybackPositions();
     msgHandler->sendEmptyMessage(MSG_DO_SOME_WORK);
   }
+  dispatchTracksChanged();
+  dispatchChaptersChanged();
 }
 
 void AvLivePlayer::updateTrackSelectionPlaybackSpeed(const float playbackSpeed) const {
@@ -2387,7 +2969,7 @@ void AvLivePlayer::resetInternal(const bool resetRenderers,
     shouldUseRequestedContentPosition(playbackInfo, period, window)
       ? playbackInfo.requestedContentPositionUs
       : playbackInfo.positionUs;
-  auto resetTrackInfo = false;
+  auto resetTrack = false;
   if (resetPosition) {
     pendingInitialSeekPosition = std::nullopt;
     auto [periodUid, positionUs] = getPlaceholderFirstMediaPeriodPosition(playbackInfo.timeline);
@@ -2395,7 +2977,7 @@ void AvLivePlayer::resetInternal(const bool resetRenderers,
     startPositionUs = positionUs;
     requestedContentPositionUs = Definitions::kTimeUnset;
     if (mediaPeriodId != playbackInfo.periodId) {
-      resetTrackInfo = true;
+      resetTrack = true;
     }
   }
 
@@ -2408,8 +2990,8 @@ void AvLivePlayer::resetInternal(const bool resetRenderers,
     playbackInfo.playbackState,
     resetError ? std::string() : playbackInfo.playbackErrorMessage,
     false,
-    resetTrackInfo ? std::shared_ptr<TrackGroupArray>() : playbackInfo.trackGroups,
-    resetTrackInfo ? emptyTrackSelectorResult : playbackInfo.trackSelectorResult,
+    resetTrack ? std::shared_ptr<TrackGroupArray>() : playbackInfo.trackGroups,
+    resetTrack ? emptyTrackSelectorResult : playbackInfo.trackSelectorResult,
     mediaPeriodId,
     playbackInfo.playWhenReady,
     playbackInfo.parameters,

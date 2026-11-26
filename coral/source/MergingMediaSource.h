@@ -37,6 +37,8 @@ struct SubtitleMetadata final {
   std::string language;
   std::string label;
   std::string id;
+  uint32_t roleFlags = 0;
+  uint32_t selectionFlags = 0;
 };
 
 class MergingMediaSource final : public MediaSource,

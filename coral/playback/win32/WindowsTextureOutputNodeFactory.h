@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef CORAL_PLAYBACK_WIN32_WINDOWS_VIDEO_OUTPUT_NODE_FACTORY_H
-#define CORAL_PLAYBACK_WIN32_WINDOWS_VIDEO_OUTPUT_NODE_FACTORY_H
+#ifndef CORAL_PLAYBACK_WIN32_WINDOWS_TEXTURE_OUTPUT_NODE_FACTORY_H
+#define CORAL_PLAYBACK_WIN32_WINDOWS_TEXTURE_OUTPUT_NODE_FACTORY_H
 
 #if defined(_WIN32)
 
@@ -24,15 +24,16 @@
 namespace coral {
 
 /**
- * The Windows bridge from a player surface to the effect engine's swapchain output.
+ * Turns a {@link Win32TextureSurface} into the player's
+ * {@code WindowsD3D11EncoderOutputNode}.
  *
- * <p>The factory understands a `VideoSurface` whose `getInstance()` is an `HWND`; that is what
- * `Win32WindowSurface` provides. It does not own the window.
+ * <p>The node renders into shared D3D11 textures and exposes the ring through the surface, which is
+ * what lets CoralUI import the current texture as an external image. The factory also records the
+ * node on the surface; {@code Win32VideoFrameSource} reads it from there.
  */
-class WindowsVideoOutputNodeFactory final : public VideoOutputNodeFactory {
+class WindowsTextureOutputNodeFactory final : public VideoOutputNodeFactory {
 public:
-  std::shared_ptr<EffectOutputNode> create(
-      const std::shared_ptr<VideoSurface>& surface) override;
+  std::shared_ptr<EffectOutputNode> create(const std::shared_ptr<VideoSurface>& surface) override;
 
   bool querySize(const std::shared_ptr<VideoSurface>& surface, uint32_t* width,
                  uint32_t* height) override;
@@ -40,6 +41,6 @@ public:
 
 } // namespace coral
 
-#endif // _WIN32
+#endif // defined(_WIN32)
 
-#endif // CORAL_PLAYBACK_WIN32_WINDOWS_VIDEO_OUTPUT_NODE_FACTORY_H
+#endif // CORAL_PLAYBACK_WIN32_WINDOWS_TEXTURE_OUTPUT_NODE_FACTORY_H

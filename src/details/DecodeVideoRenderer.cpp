@@ -297,6 +297,15 @@ void DecodeVideoRenderer::onInputFormatChanged(FormatHolder& formatHolder) {
   mWaitingForFirstSampleInFormat = true;
   auto oldFormat = std::move(mInputFormat);
   mInputFormat = formatHolder.format;
+  if (mVideoEffectGraph != nullptr) {
+    // The extractor reports the display rotation; applying it to the layout keeps a portrait clip
+    // upright even when its coded dimensions are landscape.
+    mVideoEffectGraph->setVideoRotation(mInputFormat->getRotation());
+  }
+  if (videoColorInfoListener != nullptr) {
+    videoColorInfoListener->onVideoColorInfoChanged(
+        VideoColorInfo::fromMediaColorInfo(mInputFormat->getColorInfo()));
+  }
   if (mFrameSink != nullptr) {
     mFrameSink->setInputFormat(mInputFormat);
   }
@@ -597,6 +606,13 @@ DecodeVideoRenderer::createDecoder(const std::shared_ptr<MediaFormat>& inputForm
   if (decoder != nullptr) {
     decoder->configure(decoderFormat, decoderSurface);
     decoder->start();
+    // A container may omit its colour metadata while the decoder's codec configuration carries it.
+    // Report the output format's colour after configuration so the player does not stay on the empty
+    // input format; the frame sink sees the same colour on each decoded frame.
+    if (videoColorInfoListener != nullptr && decoder->getOutputFormat() != nullptr) {
+      videoColorInfoListener->onVideoColorInfoChanged(
+          VideoColorInfo::fromMediaColorInfo(decoder->getOutputFormat()->getColorInfo()));
+    }
   }
 
   return decoder;
@@ -856,6 +872,15 @@ void DecodeVideoRenderer::setVideoSizeListener(const std::shared_ptr<VideoSizeLi
   // already known.
   if (listener != nullptr) {
     maybeRenotifyVideoSizeChanged();
+  }
+}
+
+void DecodeVideoRenderer::setVideoColorInfoListener(
+    const std::shared_ptr<VideoColorInfoListener>& listener) {
+  videoColorInfoListener = listener;
+  if (listener != nullptr && mInputFormat != nullptr) {
+    listener->onVideoColorInfoChanged(
+        VideoColorInfo::fromMediaColorInfo(mInputFormat->getColorInfo()));
   }
 }
 

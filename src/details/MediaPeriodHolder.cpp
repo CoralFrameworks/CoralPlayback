@@ -186,6 +186,11 @@ int64_t MediaPeriodHolder::applyTrackSelection(
   disassociateNoSampleRenderersWithEmptySampleStream(sampleStreams);
   disableTrackSelectionsInResult();
   trackSelectorResult = newTrackSelectorResult;
+  if (trackSelector != nullptr && newTrackSelectorResult->getInfo() != nullptr) {
+    // MappingTrackSelector keeps its current renderer/group mapping here; without this activation
+    // the mapping used by a track menu (and by selection overrides) stays null for the whole period.
+    trackSelector->onSelectionActivated(newTrackSelectorResult->getInfo());
+  }
   enableTrackSelectionsInResult();
   // Disable streams on the period and get new streams for updated/newly-enabled tracks.
   auto const& trackSelections = newTrackSelectorResult->getSelections();

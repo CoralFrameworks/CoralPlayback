@@ -53,6 +53,8 @@ std::shared_ptr<MediaSource> MergingMediaSourceFactory::createMediaSource(
     info.language = subtitle.language;
     info.label = subtitle.label;
     info.id = subtitle.id;
+    info.roleFlags = subtitle.roleFlags;
+    info.selectionFlags = subtitle.selectionFlags;
     metadata.push_back(std::move(info));
   }
   return std::make_shared<MergingMediaSource>(std::move(sources), std::move(metadata));

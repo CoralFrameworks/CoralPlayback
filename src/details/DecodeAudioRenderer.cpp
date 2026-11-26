@@ -182,6 +182,24 @@ void DecodeAudioRenderer::setVolume(float volume) {
   audioSink->setVolume(volume);
 }
 
+AudioRendererStats DecodeAudioRenderer::getRenderStats() const {
+  AudioRendererStats stats;
+  stats.decoderInitCount = decoderCounters.decoderInitCount;
+  stats.decoderReleaseCount = decoderCounters.decoderReleaseCount;
+  stats.inputBufferCount = decoderCounters.inputBufferCount;
+  stats.renderedOutputBufferCount = decoderCounters.renderedOutputBufferCount;
+  stats.skippedOutputBufferCount = decoderCounters.skippedOutputBufferCount;
+  stats.droppedBufferCount = decoderCounters.droppedBufferCount;
+  stats.sinkBackpressureCount = sinkBackpressureCount;
+  if (audioSink != nullptr) {
+    stats.xRunCountSupported = audioSink->isXRunCountSupported();
+    if (stats.xRunCountSupported) {
+      stats.xRunCount = audioSink->getXRunCount();
+    }
+  }
+  return stats;
+}
+
 void DecodeAudioRenderer::handleMessage(int type, const Message* msg) {
   if (msg == nullptr) {
     return;
@@ -379,6 +397,7 @@ bool DecodeAudioRenderer::drainOutputBuffer() {
 
   if (!audioSink->handleBuffer(data + outputBufferOffset, chunkBytes, chunkTimeUs)) {
     // The sink has no room (or is not configured yet); the same chunk is retried on the next call.
+    ++sinkBackpressureCount;
     return false;
   }
 

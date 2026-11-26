@@ -16,9 +16,14 @@
 #ifndef CORAL_PLAYBACK_PLAYER_H
 #define CORAL_PLAYBACK_PLAYER_H
 
+#include <coral/playback/AudioRenderStats.h>
+#include <coral/playback/Chapters.h>
 #include <coral/playback/MetadataOutput.h>
 #include <coral/playback/Parameters.h>
 #include <coral/playback/TextOutput.h>
+#include <coral/playback/Thumbnail.h>
+#include <coral/playback/Tracks.h>
+#include <coral/playback/VideoFrameOutput.h>
 #include <coral/playback/Volume.h>
 #include <coral/source/MediaItem.h>
 #include <coral/source/MediaSourceEventListener.h>
@@ -110,11 +115,28 @@ public:
     /** Called when the repeat mode changed. */
     virtual void onRepeatModeChanged(const RepeatMode& repeatMode) {}
 
+    /** Called when shuffle mode was enabled or disabled. */
+    virtual void onShuffleModeEnabledChanged(bool shuffleModeEnabled) {}
+
     /** Called when the volume changed. */
     virtual void onVolumeChanged(float volume) {}
 
     /** Called when the size of the video changed. */
     virtual void onVideoSizeChanged(int width, int height) {}
+
+    /** Called when the colour description of the video changed. */
+    virtual void onVideoColorInfoChanged(const VideoColorInfo& colorInfo) {}
+
+    /** Called when the chapters of the current media item changed. */
+    virtual void onChaptersChanged(const std::vector<Chapter>& chapters) {}
+
+    /**
+     * Called when the available tracks or their selection changed.
+     *
+     * <p>The snapshot is complete: a listener can replace its menu model with it. The callback runs
+     * on the thread the player's other events use.
+     */
+    virtual void onTracksChanged(const Tracks& tracks) {}
 
     /**
      * Called when an error stopped the playback.
@@ -139,6 +161,21 @@ public:
   virtual void setOutputSurface(const std::shared_ptr<VideoSurface>& surface) = 0;
 
   /**
+   * How the video is fitted into the output surface.
+   *
+   * <p>This is the platform-neutral form of {@link #setVideoScalingMode(int)}. `Fill` is a center
+   * crop; `Fit` letterboxes; `Stretch` ignores the aspect ratio. The default is `Fit`.
+   */
+  enum class VideoScaleMode : uint8_t {
+    /** Preserve the aspect ratio, letterboxing the remainder. */
+    Fit,
+    /** Preserve the aspect ratio, filling the output and cropping the overflow. */
+    Fill,
+    /** Fill the output without preserving the aspect ratio. */
+    Stretch,
+  };
+
+  /**
    * Sets video scaling mode. To make the target video scaling mode effective during playback, this
    * method must be called after data source is set. If not called, the default video scaling mode
    * is VIDEO_SCALING_MODE_SCALE_TO_FIT.
@@ -146,6 +183,43 @@ public:
    * @param mode target video scaling mode.
    */
   virtual void setVideoScalingMode(int mode) = 0;
+
+  /**
+   * Sets how the video is fitted into the output surface.
+   *
+   * <p>The default implementation maps this to the platform scaling mode, so a player that only
+   * implements {@link #setVideoScalingMode(int)} keeps working.
+   */
+  virtual void setVideoScaleMode(const VideoScaleMode mode) {
+    switch (mode) {
+      case VideoScaleMode::Fill:
+        setVideoScalingMode(2);
+        break;
+      case VideoScaleMode::Stretch:
+        setVideoScalingMode(3);
+        break;
+      case VideoScaleMode::Fit:
+      default:
+        setVideoScalingMode(1);
+        break;
+    }
+  }
+
+  /** Returns the scaling mode requested with {@link #setVideoScaleMode}. */
+  [[nodiscard]] virtual VideoScaleMode getVideoScaleMode() const {
+    return VideoScaleMode::Fit;
+  }
+
+  /**
+   * Mirrors the video after rotation and fitting.
+   *
+   * <p>The default implementation ignores it; a platform that renders through an effect graph
+   * applies it in the layout pass.
+   */
+  virtual void setVideoMirror(bool horizontal, bool vertical) {
+    static_cast<void>(horizontal);
+    static_cast<void>(vertical);
+  }
 
   /**
    * Sets the receiver of the cues that the player renders, or clears it with null.
@@ -169,6 +243,144 @@ public:
 
   /** Sets the factory that turns a media item into a media source. */
   virtual void setMediaSourceFactory(const std::shared_ptr<MediaSourceFactory>& factory) {}
+
+  /**
+   * Returns the latest frame the effect graph rendered into the application's surface.
+   *
+   * <p>A UI bridge polls it and imports the surface when {@link VideoFrameOutput::sequence}
+   * changes. The default implementation returns an empty value for players without an effect video
+   * pipeline.
+   */
+  [[nodiscard]] virtual VideoFrameOutput getVideoFrameOutput() const {
+    return {};
+  }
+
+  /** Returns the colour description of the current video, or defaults when unknown. */
+  [[nodiscard]] virtual VideoColorInfo getVideoColorInfo() const {
+    return {};
+  }
+
+  /** Returns the chapters of the current media item, or an empty list when it has none. */
+  [[nodiscard]] virtual std::vector<Chapter> getChapters() const {
+    return {};
+  }
+
+  /** Returns diagnostics for every audio renderer, in renderer order. */
+  [[nodiscard]] virtual std::vector<AudioRendererStats> getAudioRendererStats() const {
+    return {};
+  }
+
+  /** Returns how many times the active audio renderer changed. */
+  [[nodiscard]] virtual uint64_t getAudioRendererSwitchCount() const {
+    return 0;
+  }
+
+  /**
+   * Installs the provider used by {@link requestThumbnail}, or clears it.
+   *
+   * <p>The provider is application/platform code; the player only calls it and cancels it when it is
+   * released. A null provider disables thumbnail requests.
+   */
+  virtual void setThumbnailProvider(std::shared_ptr<ThumbnailProvider> provider) {
+    static_cast<void>(provider);
+  }
+
+  [[nodiscard]] virtual std::shared_ptr<ThumbnailProvider> getThumbnailProvider() const {
+    return nullptr;
+  }
+
+  /** Requests one thumbnail from the installed provider. Does nothing without one. */
+  virtual void requestThumbnail(int64_t positionUs, ThumbnailProvider::Callback callback) {
+    static_cast<void>(positionUs);
+    static_cast<void>(callback);
+  }
+
+  /** Warms the installed provider for a position without delivering a frame. */
+  virtual void prefetchThumbnail(int64_t positionUs) {
+    static_cast<void>(positionUs);
+  }
+
+  /**
+   * Warms thumbnails across a seek-bar range. The range is [startUs, endUs) sampled every stepUs;
+   * at most 64 positions are requested. Invalid ranges or a non-positive step do nothing.
+   */
+  virtual void prefetchThumbnails(int64_t startUs, int64_t endUs, int64_t stepUs) {
+    static_cast<void>(startUs);
+    static_cast<void>(endUs);
+    static_cast<void>(stepUs);
+  }
+
+  /** Drops queued thumbnail prefetches, e.g. after the seek bar moved to another range. */
+  virtual void cancelThumbnailPrefetch() {}
+
+  /**
+   * Sets the preferred audio language as an IETF BCP 47 tag.
+   *
+   * <p>An explicit {@code selectTrack} on an audio track still wins. Empty clears the preference.
+   */
+  virtual void setPreferredAudioLanguage(const std::string& language) {
+    static_cast<void>(language);
+  }
+
+  [[nodiscard]] virtual std::string getPreferredAudioLanguage() const {
+    return {};
+  }
+
+  [[nodiscard]] virtual std::string getPreferredTextLanguage() const {
+    return {};
+  }
+
+  /**
+   * Sets the preferred text role flags (forced, caption, commentary, ...). The selector uses them
+   * as a preference, not as a hard filter; zero clears the preference.
+   */
+  virtual void setPreferredTextRoleFlags(int roleFlags) {
+    static_cast<void>(roleFlags);
+  }
+
+  [[nodiscard]] virtual int getPreferredTextRoleFlags() const {
+    return 0;
+  }
+
+  /**
+   * Whether a text track with no language may be selected when no preferred language matches.
+   * Defaults to true.
+   */
+  virtual void setSelectUndeterminedTextLanguage(bool select) {
+    static_cast<void>(select);
+  }
+
+  [[nodiscard]] virtual bool getSelectUndeterminedTextLanguage() const {
+    return true;
+  }
+
+  /**
+   * Returns the tracks of the current media item and the current selection.
+   *
+   * <p>An empty value is returned before the first period is prepared. The default implementation
+   * returns an empty snapshot for players that do not expose tracks.
+   */
+  [[nodiscard]] virtual Tracks getCurrentTracks() const {
+    return {};
+  }
+
+  /**
+   * Selects one track explicitly.
+   *
+   * @param rendererIndex the renderer index from {@link TrackInfo#rendererIndex}.
+   * @param groupIndex the group index inside that renderer.
+   * @param trackIndex the track index inside that group.
+   */
+  virtual void selectTrack(int rendererIndex, int groupIndex, int trackIndex) {
+    static_cast<void>(rendererIndex);
+    static_cast<void>(groupIndex);
+    static_cast<void>(trackIndex);
+  }
+
+  /** Returns a renderer to automatic track selection. */
+  virtual void clearTrackSelection(int rendererIndex) {
+    static_cast<void>(rendererIndex);
+  }
 
   [[nodiscard]] virtual std::shared_ptr<TextOutput> getTextOutput() const { return nullptr; }
 
@@ -299,6 +511,15 @@ public:
    */
   [[nodiscard]] virtual const RepeatMode& getRepeatMode() const = 0;
 
+  /** Enables or disables playlist shuffling. The current item does not change immediately. */
+  virtual void setShuffleModeEnabled(bool enabled) {
+    static_cast<void>(enabled);
+  }
+
+  [[nodiscard]] virtual bool getShuffleModeEnabled() const {
+    return false;
+  }
+
   /**
    * Whether the player is currently loading the source.
    */
@@ -331,6 +552,39 @@ public:
    * Returns the currently active playback parameters.
    */
   [[nodiscard]] virtual const Parameters& getPlaybackParameters() const = 0;
+
+  /** A half-open interval of media that is buffered and can be seeked into without loading. */
+  struct BufferedRange {
+    int64_t startUs = 0;
+    int64_t endUs = 0;
+  };
+
+  /**
+   * Returns how far the player has buffered from the current position.
+   *
+   * <p>This is the end of the contiguous buffered range that contains the current position, or the
+   * current position when nothing is buffered ahead. A buffered seek bar uses it together with
+   * {@link #getCurrentPositionUs}.
+   */
+  [[nodiscard]] virtual int64_t getBufferedPositionUs() const {
+    return getCurrentPositionUs();
+  }
+
+  /**
+   * Returns the buffered intervals of the current media item.
+   *
+   * <p>The default implementation reports the single range between the current and buffered
+   * positions, which is what a progressive source has. A player that knows several ranges (for
+   * example after a seek into a cached part) overrides it.
+   */
+  [[nodiscard]] virtual std::vector<BufferedRange> getBufferedRanges() const {
+    const auto positionUs = getCurrentPositionUs();
+    const auto bufferedPositionUs = getBufferedPositionUs();
+    if (bufferedPositionUs > positionUs) {
+      return { BufferedRange { positionUs, bufferedPositionUs } };
+    }
+    return {};
+  }
 
   /**
    * Gets the current playback position.
@@ -457,6 +711,32 @@ public:
    * @return The media item, or null when the index is out of range.
    */
   [[nodiscard]] virtual const std::shared_ptr<MediaItem>& getMediaItemAt(int index) const = 0;
+
+  /** Returns the index of the current media item, or 0 when the playlist is empty. */
+  [[nodiscard]] virtual int getCurrentMediaItemIndex() const {
+    return 0;
+  }
+
+  /** Returns the media item that follows the current one, or -1 at the end of the playlist. */
+  [[nodiscard]] virtual int getNextMediaItemIndex() const {
+    return static_cast<int>(Definitions::kIndexUnset);
+  }
+
+  /** Returns the media item that precedes the current one, or -1 at the start. */
+  [[nodiscard]] virtual int getPreviousMediaItemIndex() const {
+    return static_cast<int>(Definitions::kIndexUnset);
+  }
+
+  /** Seeks to the default position of the media item at @p index. */
+  virtual void seekToMediaItem(int index) {
+    static_cast<void>(index);
+  }
+
+  /** Seeks to the default position of the next media item, if there is one. */
+  virtual void seekToNextMediaItem() {}
+
+  /** Seeks to the default position of the previous media item, if there is one. */
+  virtual void seekToPreviousMediaItem() {}
 
   /**
    * Adds media items to the playlist, starting at the given index.

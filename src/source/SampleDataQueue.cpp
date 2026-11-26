@@ -19,7 +19,10 @@
 
 #include <coral/upstream/DefaultAllocator.h>
 
+#include <minilog/log.h>
+
 #include <algorithm>
+#include <stdexcept>
 #include <vector>
 
 namespace coral {
@@ -191,8 +194,15 @@ void SampleDataQueue::clearAllocationNodes(const std::shared_ptr<AllocationNode>
 
 int SampleDataQueue::preAppend(int length) {
   if (writeNode->allocation == nullptr) {
-    writeNode->initialize(
-        mAllocator->allocate(),
+    auto allocation = mAllocator->allocate();
+    if (allocation == nullptr) {
+      // The allocator can refuse an allocation after it was released. Writing into a null
+      // allocation would take the process down; report a load error instead, which the loader turns
+      // into a retry or a playback error.
+      MINILOG_ERROR("the sample queue allocator returned no allocation");
+      throw std::runtime_error("the sample queue allocator returned no allocation");
+    }
+    writeNode->initialize(allocation,
         std::make_shared<AllocationNode>(writeNode->endPosition, allocationLength));
   }
   return std::min(length, (int)(writeNode->endPosition - totalBytesWritten));

@@ -46,8 +46,10 @@ add_executable(${TARGET}
     test_AnalyticsCollector.cpp
     test_AudioPlayback.cpp
     test_AvLivePlayer.cpp
+    test_ChapterThumbnailProvider.cpp
     test_DefaultLoadControl.cpp
     test_DefaultProgressiveMediaExtractor.cpp
+    test_DiskThumbnailProvider.cpp
     test_MediaSourceList.cpp
     test_MergePlayer.cpp
     test_MergingMediaSource.cpp
@@ -55,12 +57,16 @@ add_executable(${TARGET}
     test_MetadataRenderer.cpp
     test_LottieOverlayNode.cpp
     test_TextRenderer.cpp
+    test_ThumbnailCache.cpp
+    test_ThumbnailProvider.cpp
     test_ProgressiveMediaSource.cpp
     test_SilenceMediaSource.cpp
+    test_SubtitleTracks.cpp
     test_SubtitleOverlayNode.cpp
     test_UpstreamAndSelection.cpp
     test_VideoEffectGraph.cpp
     test_VideoFrameConverter.cpp
+    test_VideoColorInfo.cpp
     test_VideoFrameSink.cpp
     test_VideoLayoutPass.cpp
 )
@@ -72,13 +78,13 @@ target_include_directories(${TARGET} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${CORAL_SUBTITLE_SRC_DIR}
 )
-target_link_libraries(${TARGET} PRIVATE playback extractor gtest)
+target_link_libraries(${TARGET} PRIVATE playback extractor muxer gtest)
 target_compile_definitions(${TARGET} PRIVATE CORAL_ASSETS_DIR="${CORAL_TEST_DATA_DIR}")
 target_compile_definitions(${TARGET} PRIVATE CORAL_GRAPHICS_RESOURCE_DIR="${CORAL_GRAPHICS_RESOURCE_DIR}")
 
 if (WIN32 AND NOT ANDROID)
   target_sources(${TARGET} PRIVATE test_WindowsOutputBinding.cpp test_LivePlayerEffect.cpp)
-  target_link_libraries(${TARGET} PRIVATE effect_win)
+  target_link_libraries(${TARGET} PRIVATE effect_win d3d11 dxgi mfplat mfreadwrite mfuuid ole32)
 endif ()
 
 if (APPLE)

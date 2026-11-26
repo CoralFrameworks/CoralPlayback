@@ -292,7 +292,11 @@ set(CORAL_PLAYBACK_TARGET playback)
 set(CORAL_PLAYBACK_PUBLIC_HDR_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 set(PUBLIC_HDRS
+    coral/playback/AudioRenderStats.h
+    coral/playback/ChapterThumbnailProvider.h
+    coral/playback/Chapters.h
     coral/playback/DefaultMediaClock.h
+    coral/playback/DiskThumbnailProvider.h
     coral/playback/LivePlayer.h
     coral/playback/LoadControl.h
     coral/playback/MediaClock.h
@@ -304,7 +308,12 @@ set(PUBLIC_HDRS
     coral/playback/Renderer.h
     coral/playback/StandaloneClock.h
     coral/playback/TextOutput.h
+    coral/playback/Thumbnail.h
+    coral/playback/ThumbnailCache.h
     coral/playback/TimedFormatQueue.h
+    coral/playback/Tracks.h
+    coral/playback/VideoColorInfo.h
+    coral/playback/VideoFrameOutput.h
     coral/playback/VideoFrameSink.h
     coral/playback/VideoOutput.h
     coral/playback/Volume.h
@@ -385,11 +394,27 @@ if (ANDROID)
   )
 endif ()
 
+if (WIN32 AND NOT ANDROID)
+  list(APPEND PUBLIC_HDRS
+      coral/playback/win32/Win32TextureSurface.h
+      coral/playback/win32/Win32VideoFrameSource.h
+      coral/playback/win32/WindowsHardwareVideoSurface.h
+      coral/playback/win32/WindowsThumbnailProvider.h
+      coral/playback/win32/WindowsTextureOutputNodeFactory.h
+      coral/playback/win32/WindowsVideoDevice.h
+      coral/playback/win32/WindowsVideoFrameSink.h
+      coral/playback/win32/WindowsVideoInput.h
+      coral/playback/win32/WindowsVideoOutputNodeFactory.h
+  )
+endif ()
+
 if (APPLE)
   list(APPEND PUBLIC_HDRS
       coral/playback/apple/AppleHardwareVideoSurface.h
       coral/playback/apple/AppleIOSurface.h
+      coral/playback/apple/AppleVideoFrameSource.h
       coral/playback/apple/AppleVideoInput.h
+      coral/playback/apple/AppleThumbnailProvider.h
       coral/playback/apple/AppleVideoOutputNodeFactory.h
   )
 endif ()
@@ -399,6 +424,7 @@ set(SRCS
     src/details/AvLivePlayer.h
     src/details/BaseRenderer.cpp
     src/details/BaseRenderer.h
+    src/details/ChapterThumbnailProvider.cpp
     src/details/CpuVideoFrameSink.cpp
     src/details/CpuVideoFrameSink.h
     src/details/DecodeAudioRenderer.cpp
@@ -409,10 +435,12 @@ set(SRCS
     src/details/MetadataRenderer.cpp
     src/details/MetadataRenderer.h
     src/details/DefaultLoadControl.cpp
+    src/details/DiskThumbnailProvider.cpp
     src/details/DefaultLoadControl.h
     src/details/SubtitleOverlayNode.cpp
     src/details/SubtitleOverlayNode.h
     src/details/TextRenderer.cpp
+    src/details/ThumbnailCache.cpp
     src/details/TextRenderer.h
     src/details/VideoLayoutPass.cpp
     src/details/VideoLayoutPass.h
@@ -477,6 +505,7 @@ set(SRCS
     src/util/SystemLanguage.cpp
     # src
     src/DefaultMediaClock.cpp
+    src/details/VideoColorInfo.cpp
     src/LivePlayer.cpp
     src/ostream.cpp
     src/TimedFormatQueue.cpp
@@ -485,7 +514,15 @@ set(SRCS
 
 if (WIN32 AND NOT ANDROID)
   list(APPEND SRCS
+      src/platform/win32/Win32TextureSurface.cpp
+      src/platform/win32/Win32VideoFrameSource.cpp
+      src/platform/win32/WindowsHardwareVideoSurface.cpp
+      src/platform/win32/WindowsThumbnailProvider.cpp
       src/platform/win32/Win32WindowSurface.cpp
+      src/platform/win32/WindowsTextureOutputNodeFactory.cpp
+      src/platform/win32/WindowsVideoDevice.cpp
+      src/platform/win32/WindowsVideoFrameSink.cpp
+      src/platform/win32/WindowsVideoInput.cpp
       src/platform/win32/WindowsVideoOutputNodeFactory.cpp
   )
 endif ()
@@ -506,8 +543,10 @@ if (APPLE)
       src/platform/apple/AppleHardwareVideoSurface.mm
       src/platform/apple/AppleIOSurface.mm
       src/platform/apple/AppleVideoFrameSink.h
+      src/platform/apple/AppleThumbnailProvider.mm
       src/platform/apple/AppleVideoFrameSink.mm
-      src/platform/apple/AppleVideoInput.mm
+      src/platform/apple/AppleVideoFrameSource.mm
+    src/platform/apple/AppleVideoInput.mm
       src/platform/apple/AppleVideoOutputNodeFactory.mm
   )
 endif ()
@@ -543,6 +582,7 @@ target_link_libraries(${CORAL_PLAYBACK_TARGET} PRIVATE yuv)
 
 if (WIN32 AND NOT ANDROID)
   target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC effect_win)
+  target_link_libraries(${CORAL_PLAYBACK_TARGET} PRIVATE mfplat mfreadwrite mfuuid ole32)
 elseif (ANDROID)
   target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC effect_android)
 elseif (APPLE)
@@ -550,7 +590,9 @@ elseif (APPLE)
   # `AppleIOSurfaceInputNode`; both live in CoralGraphics' `effect_apple` target.
   target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC effect_apple)
   target_link_libraries(${CORAL_PLAYBACK_TARGET} PRIVATE
+      "-framework AVFoundation"
       "-framework CoreFoundation"
+      "-framework CoreGraphics"
       "-framework CoreVideo"
       "-framework IOSurface"
       "-framework VideoToolbox")

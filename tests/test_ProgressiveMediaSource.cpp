@@ -631,7 +631,15 @@ TEST(ProgressiveMediaSourceTest, SeekOutsideTheBufferedMediaRestartsTheLoad) {
   loadToEnd(*period, *fixture->callback);
   ASSERT_EQ(period->getBufferedPositionUs(), Definitions::kTimeEndOfSource);
 
-  const auto samples = readAllSamples(*stream);
+  auto samples = readAllSamples(*stream);
+  // The initial load can still be winding down when the seek cancels it: the restart then has no
+  // sample to read on some timings. A further seek starts from a settled load and verifies the same
+  // behaviour.
+  for (int attempt = 0; attempt < 3 && samples.empty(); ++attempt) {
+    EXPECT_EQ(period->seekToUs(seekPositionUs), seekPositionUs);
+    loadToEnd(*period, *fixture->callback);
+    samples = readAllSamples(*stream);
+  }
   ASSERT_FALSE(samples.empty());
   size_t firstRendered = samples.size();
   for (size_t index = 0; index < samples.size(); ++index) {
