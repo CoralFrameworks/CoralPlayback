@@ -262,6 +262,12 @@ TEST(TextRendererTest, LivePlayerDeliversTheCuesToTheOutputAndTheListeners) {
   ASSERT_TRUE(waitUntil([&player] {
     return player->getPlaybackState() == coral::Player::State::STATE_READY;
   })) << "the player did not become ready";
+  // Wait until the media is buffered past the first cue before the clock starts: on a busy machine
+  // the load can otherwise still be behind the playhead when playback starts, and the first cue is
+  // skipped before the text stream has it.
+  ASSERT_TRUE(waitUntil([&player] {
+    return player->getBufferedPositionUs() >= 1600000;
+  })) << "the media was not buffered past the first cue";
   player->play();
   ASSERT_TRUE(waitUntil([&output] { return output->sawText("Hello Coral"); }))
       << "the text output never received the first cue";
@@ -297,6 +303,12 @@ TEST(TextRendererTest, ASideLoadedSubtitleIsNotClearedByTheEmbeddedTrack) {
   ASSERT_TRUE(waitUntil([&player] {
     return player->getPlaybackState() == coral::Player::State::STATE_READY;
   })) << "the player did not become ready";
+  // Wait until the media is buffered past the first cue before the clock starts: on a busy machine
+  // the load can otherwise still be behind the playhead when playback starts, and the first cue is
+  // skipped before the text stream has it.
+  ASSERT_TRUE(waitUntil([&player] {
+    return player->getBufferedPositionUs() >= 1600000;
+  })) << "the media was not buffered past the first cue";
   player->play();
   ASSERT_TRUE(waitUntil([&output] { return output->sawText(); }, std::chrono::milliseconds(15000)))
       << "the side-loaded cue was never delivered";

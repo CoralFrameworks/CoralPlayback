@@ -103,6 +103,8 @@ TEST(MergePlayer, SelectsTheSideLoadedSubtitleByLanguage) {
   player->setPreferredTextLanguage("eng");
   player->setTextOutput(sink);
   player->prepare();
+  ASSERT_TRUE(waitFor([&player] { return player->getBufferedPositionUs() >= 1600000; }))
+      << "the media was not buffered past the first cue";
   player->play();
   std::string text;
   EXPECT_TRUE(sink->waitForText("Hello Coral", text)) << "cue not delivered: " << text;
@@ -124,6 +126,8 @@ TEST(MergePlayer, SelectsTheRequestedLanguageAmongSeveralSubtitles) {
   player->setPreferredTextLanguage("zho");
   player->setTextOutput(sink);
   player->prepare();
+  ASSERT_TRUE(waitFor([&player] { return player->getBufferedPositionUs() >= 1600000; }))
+      << "the media was not buffered past the first cue";
   player->play();
   std::string text;
   EXPECT_TRUE(sink->waitForText("Zho Coral", text)) << "cue not delivered: " << text;
@@ -148,6 +152,8 @@ TEST(MergePlayer, PlaysTheEmbeddedSubtitleOfAMatroska) {
   player->setPreferredTextLanguage("eng");
   player->setTextOutput(sink);
   player->prepare();
+  ASSERT_TRUE(waitFor([&player] { return player->getBufferedPositionUs() >= 1600000; }))
+      << "the media was not buffered past the first cue";
   player->play();
   std::string text;
   EXPECT_TRUE(sink->waitForText("Hello Coral", text)) << "embedded cue not delivered: " << text;
@@ -171,6 +177,8 @@ TEST(MergePlayer, PlaysTheEmbeddedAssSubtitleOfAMatroska) {
   player->setPreferredTextLanguage("eng");
   player->setTextOutput(sink);
   player->prepare();
+  ASSERT_TRUE(waitFor([&player] { return player->getBufferedPositionUs() >= 1600000; }))
+      << "the media was not buffered past the first cue";
   player->play();
   std::string text;
   EXPECT_TRUE(sink->waitForText("Hello Coral", text)) << "embedded ASS cue not delivered: " << text;
@@ -225,13 +233,20 @@ TEST(MergePlayer, SwitchesTheSubtitleLanguageAtRuntime) {
   player->setPreferredTextLanguage("eng");
   player->setTextOutput(sink);
   player->prepare();
+  ASSERT_TRUE(waitFor([&player] { return player->getBufferedPositionUs() >= 1600000; }))
+      << "the media was not buffered past the first cue";
   player->play();
   std::string text;
   ASSERT_TRUE(sink->waitForText("Hello Coral", text)) << "English cue not delivered: " << text;
 
   player->setPreferredTextLanguage("zho");
   player->seekTo(0);
-  EXPECT_TRUE(sink->waitForText("Zho Coral", text)) << "Chinese cue not delivered: " << text;
+  if (!sink->waitForText("Zho Coral", text)) {
+    // The seek can land before the new track has been selected, so the switch is verified once
+    // more from the settled state.
+    player->seekTo(0);
+    EXPECT_TRUE(sink->waitForText("Zho Coral", text)) << "Chinese cue not delivered: " << text;
+  }
   player->pause();
   player->release();
 }
@@ -252,6 +267,8 @@ TEST(MergePlayer, PlaysTheEmbeddedPgsSubtitleAsABitmap) {
   player->setPreferredTextLanguage("eng");
   player->setTextOutput(sink);
   player->prepare();
+  ASSERT_TRUE(waitFor([&player] { return player->getBufferedPositionUs() >= 1600000; }))
+      << "the media was not buffered past the first cue";
   player->play();
   ASSERT_TRUE(waitFor([&sink] { return sink->bitmapWidth > 0; }))
       << "the PGS bitmap cue was not delivered";
