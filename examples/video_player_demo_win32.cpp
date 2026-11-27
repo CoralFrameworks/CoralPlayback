@@ -1120,11 +1120,14 @@ int runHeadless(const Options& options) {
   // first picture arrives; start sampling one frame interval in rather than at position zero.
   int64_t nextCaptureUs = kCaptureIntervalUs;
   if (options.seekUs > 0) {
-    // Frames queued before the seek landed still carry the old positions; start sampling just past
-    // the requested position instead of writing them into the dump.
-    nextCaptureUs = options.seekUs + kCaptureIntervalUs;
+    // Frames queued before the seek landed still carry the old positions; the first frame at or
+    // after the requested position is the one to dump.
+    nextCaptureUs = options.seekUs;
   }
-  auto lastNewFrame = std::chrono::steady_clock::now();
+  // The frames of a seek can stay behind the target for a while (the decoder restarts at the
+  // keyframe before it). They are skipped, but the loop still gives up when no frame has been
+  // written for this long, so a seek that never reaches the target cannot spin forever.
+  auto lastProgress = std::chrono::steady_clock::now();
 
   while (written < wanted) {
     if (session->listener()->failed()) {
@@ -1139,7 +1142,7 @@ int runHeadless(const Options& options) {
       if (session->listener()->ended() && written > 0) {
         break;
       }
-      if (std::chrono::steady_clock::now() - lastNewFrame >= 10s) {
+      if (std::chrono::steady_clock::now() - lastProgress >= 10s) {
         break;
       }
       continue;
@@ -1147,10 +1150,15 @@ int runHeadless(const Options& options) {
 
     const int64_t positionUs = frame.timestamp().toTicks(1'000'000);
     if (positionUs < nextCaptureUs) {
-      lastNewFrame = std::chrono::steady_clock::now();
+      if (std::chrono::steady_clock::now() - lastProgress >= 10s) {
+        break;
+      }
       continue;
-    }char name[32] = {};
-    std::snprintf(name, sizeof(name), "frame_%05d.png", written + 1);
+    }
+
+    char name[64] = {};
+    std::snprintf(name, sizeof(name), "frame_%05d_%lldus.png", written + 1,
+                  static_cast<long long>(positionUs));
     const auto path = std::filesystem::path(options.outputDirectory) / name;
     if (!writePng(frame.width(), frame.height(), pixels, path)) {
       std::fprintf(stderr, "error: cannot write '%s'\n", path.string().c_str());
@@ -1161,7 +1169,7 @@ int runHeadless(const Options& options) {
     std::fflush(stdout);
     ++written;
     nextCaptureUs = positionUs + kCaptureIntervalUs;
-    lastNewFrame = std::chrono::steady_clock::now();
+    lastProgress = std::chrono::steady_clock::now();
 
     if (session->listener()->ended() && written > 0) {
       break;

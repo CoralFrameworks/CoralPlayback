@@ -209,6 +209,8 @@ $cases = @(
     @{ Name = "zc-720p"; Media = (Join-Path $video "video720p_5s.mp4"); ZeroCopy = $true },
     @{ Name = "cpu-720p-subtitle"; Media = (Join-Path $video "video720p_5s.mp4"); Extra = @("--subtitle", (Join-Path $subtitle "sample.srt")) },
     @{ Name = "cpu-720p-speed"; Media = (Join-Path $video "video720p_5s.mp4"); Extra = @("--speed", "2") },
+    @{ Name = "cpu-720p-seek"; Media = (Join-Path $video "video720p_5s.mp4"); Extra = @("--seek", "1.0") },
+    @{ Name = "zc-720p-seek"; Media = (Join-Path $video "video720p_5s.mp4"); ZeroCopy = $true; Extra = @("--seek", "1.0") },
     @{ Name = "cpu-multi-audio"; Media = (Join-Path $video "multi_audio_5s.mp4"); Extra = @("--audio-track", "1") },
     @{ Name = "zc-multi-audio"; Media = (Join-Path $video "multi_audio_5s.mp4"); ZeroCopy = $true },
     @{ Name = "cpu-forced-subtitle"; Media = (Join-Path $video "forced_subtitle_5s.mkv") },
