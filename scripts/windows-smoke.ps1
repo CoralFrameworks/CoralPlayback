@@ -149,10 +149,11 @@ function Invoke-DemoCase {
     }
     $meanText = if ($stats.Count -gt 0) { "{0:N1}/{1:N1}" -f $stats[0].Mean, $stats[0].Std } else { "-" }
 
-    $fallback = $run.Text -match "does not support HDR|falling back to the CPU|zero-copy input produced no decoded frame"
+    $fallback = $run.Text -match "does not support HDR|supports H.264 only|falling back to the CPU|zero-copy input produced no decoded frame"
     $status = "PASS"
     $detail = ""
     if ($run.TimedOut) { $status = "FAIL"; $detail = "timeout" }
+    elseif ($run.Text -match "Dolby Vision is not supported") { $status = "SKIP"; $detail = "reported unsupported (DV)" }
     elseif ($run.ExitCode -ne 0) { $status = "FAIL"; $detail = "exit $($run.ExitCode)" }
     elseif ($ZeroCopy -and $fallback) { $status = "SKIP"; $detail = "fell back to CPU" }
     elseif (-not $framesMatch.Success -and $ZeroCopy) { $status = "FAIL"; $detail = "no frame counters" }

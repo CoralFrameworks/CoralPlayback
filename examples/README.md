@@ -78,6 +78,10 @@ driver's GPU write into its surface has completed, and it exposes no fence for t
 frame in ten can then arrive torn, which is why the CPU upload is the default. The demo also falls back
 to the CPU input automatically when `--zero-copy` produces no frame at all (no hardware MFT, no video
 processor), so it still plays on a machine without hardware decoding.
+The zero-copy decoder is the D3D11VA one, which handles H.264 only: an HEVC stream is sent to the CPU
+input directly, and a Dolby Vision file is reported as unsupported by the Windows decoder instead of
+starting a pipeline that cannot present a frame. HDR (10-bit) sources use the CPU input as well. Both
+inputs print a `video frames:` line, so a run can be told apart from a fallback without guessing.
 
 The engine renders at the window's client area, so a resize changes the picture size rather than
 scaling a fixed surface. The demo debounces `WM_SIZE` and then re-attaches the same window surface
