@@ -435,6 +435,45 @@ bool isHdrMedia(const std::string& path) {
   }
   return false;
 }
+/** The codec of the first video track, or invalid when the metadata cannot be read. */
+coral::VideoCodecType videoCodecOf(const std::string& path) {
+  const auto retriever = coral::MediaMetadataRetriever::create(path);
+  if (retriever == nullptr) {
+    return coral::VideoCodecType::kVideoCodecTypeInvalid;
+  }
+  const int trackCount = retriever->getTrackCount();
+  for (int index = 0; index < trackCount; ++index) {
+    const auto format = retriever->getTrackFormat(index);
+    if (format == nullptr || !format->isVideo()) {
+      continue;
+    }
+    const auto codec = format->getVideoCodecType();
+    if (codec != coral::VideoCodecType::kVideoCodecTypeInvalid) {
+      return codec;
+    }
+    if (format->getMimeType() == "video/avc") {
+      return coral::VideoCodecType::kVideoCodecTypeH264;
+    }
+    if (format->getMimeType() == "video/dolby-vision") {
+      return coral::VideoCodecType::kVideoCodecTypeDolbyVision;
+    }
+    return coral::VideoCodecType::kVideoCodecTypeInvalid;
+  }
+  return coral::VideoCodecType::kVideoCodecTypeInvalid;
+}
+
+/**
+ * The zero-copy input runs the decoder into Direct3D 11 textures and converts them with the video
+ * processor, which the D3D11VA decoder drives for H.264. A stream the decoder does not open (HEVC,
+ * Dolby Vision) would only fall back after the frame wait, so it is sent to the CPU input directly.
+ */
+bool isZeroCopyCodec(const std::string& path) {
+  return videoCodecOf(path) == coral::VideoCodecType::kVideoCodecTypeH264;
+}
+
+bool isDolbyVisionMedia(const std::string& path) {
+  return videoCodecOf(path) == coral::VideoCodecType::kVideoCodecTypeDolbyVision;
+}
 // ==================================================================================================
 // Headless surface and output (no window)
 // ==================================================================================================
@@ -730,25 +769,30 @@ public:
 private:
   /** The input selection and its fallbacks; audio is checked by `create` above. */
   static std::unique_ptr<PlayerSession> createWithVideoFallback(const Options& options, HWND window) {
-    if (options.zeroCopy && isHdrMedia(options.mediaPath)) {
-      std::fprintf(stderr,
-                   "warning: the zero-copy input does not support HDR (10-bit) sources yet; using the "
-                   "CPU input\n");
-    } else if (options.zeroCopy) {
-      const auto device = coral::WindowsVideoDevice::create();
-      if (device == nullptr) {
+    if (options.zeroCopy) {
+      if (isHdrMedia(options.mediaPath)) {
         std::fprintf(stderr,
-                     "warning: no Direct3D 11 device with video support on this host; using the CPU "
-                     "input\n");
+                     "warning: the zero-copy input does not support HDR (10-bit) sources yet; using the "
+                     "CPU input\n");
+      } else if (!isZeroCopyCodec(options.mediaPath)) {
+        std::fprintf(stderr,
+                     "warning: the zero-copy input supports H.264 only; using the CPU input\n");
       } else {
-        auto session = build(options, window, device);
-        if (session != nullptr && session->waitForHardwareFrame(4s)) {
-          return session;
+        const auto device = coral::WindowsVideoDevice::create();
+        if (device == nullptr) {
+          std::fprintf(stderr,
+                       "warning: no Direct3D 11 device with video support on this host; using the CPU "
+                       "input\n");
+        } else {
+          auto session = build(options, window, device);
+          if (session != nullptr && session->waitForHardwareFrame(4s)) {
+            return session;
+          }
+          std::fprintf(stderr,
+                       "warning: the zero-copy input produced no decoded frame; falling back to the CPU "
+                       "input\n");
+          session.reset();
         }
-        std::fprintf(stderr,
-                     "warning: the zero-copy input produced no decoded frame; falling back to the CPU "
-                     "input\n");
-        session.reset();
       }
     }
     return build(options, window, nullptr);
@@ -1012,18 +1056,33 @@ private:
   std::shared_ptr<coral::WindowsVideoDevice> mDevice;
 };
 
-/** Prints what the hardware sink did, so a run can be told apart from the CPU fallback. */
-void printVideoStatistics(const std::shared_ptr<coral::WindowsVideoFrameSink>& sink) {
-  if (sink == nullptr) {
+/**
+ * Prints what the input did, so a run can be told apart from the CPU fallback.
+ *
+ * <p>The CPU input has no hardware sink; its frames are the ones the engine rendered, which is what
+ * the smoke script checks together with the dumped pictures.
+ */
+void printVideoStatistics(const std::shared_ptr<coral::WindowsVideoFrameSink>& sink,
+    const std::shared_ptr<coral::EffectEngine>& engine) {
+  if (sink != nullptr) {
+    std::printf("video frames: %llu submitted (%llu direct, %llu converted, %llu dropped), "
+                "zero-copy import: %s\n",
+                static_cast<unsigned long long>(sink->submittedFrameCount()),
+                static_cast<unsigned long long>(sink->directFrameCount()),
+                static_cast<unsigned long long>(sink->convertedFrameCount()),
+                static_cast<unsigned long long>(sink->droppedFrameCount()),
+                sink->isZeroCopy() ? "yes" : "no");
+    std::fflush(stdout);
     return;
   }
+  if (engine == nullptr) {
+    return;
+  }
+  const auto frames = engine->stats().frameCount;
   std::printf("video frames: %llu submitted (%llu direct, %llu converted, %llu dropped), "
-              "zero-copy import: %s\n",
-              static_cast<unsigned long long>(sink->submittedFrameCount()),
-              static_cast<unsigned long long>(sink->directFrameCount()),
-              static_cast<unsigned long long>(sink->convertedFrameCount()),
-              static_cast<unsigned long long>(sink->droppedFrameCount()),
-              sink->isZeroCopy() ? "yes" : "no");
+              "zero-copy import: no\n",
+              static_cast<unsigned long long>(frames), 0ULL,
+              static_cast<unsigned long long>(frames), 0ULL);
   std::fflush(stdout);
 }
 
@@ -1061,11 +1120,14 @@ int runHeadless(const Options& options) {
   // first picture arrives; start sampling one frame interval in rather than at position zero.
   int64_t nextCaptureUs = kCaptureIntervalUs;
   if (options.seekUs > 0) {
-    // Frames queued before the seek landed still carry the old positions; start sampling just past
-    // the requested position instead of writing them into the dump.
-    nextCaptureUs = options.seekUs + kCaptureIntervalUs;
+    // Frames queued before the seek landed still carry the old positions; the first frame at or
+    // after the requested position is the one to dump.
+    nextCaptureUs = options.seekUs;
   }
-  auto lastNewFrame = std::chrono::steady_clock::now();
+  // The frames of a seek can stay behind the target for a while (the decoder restarts at the
+  // keyframe before it). They are skipped, but the loop still gives up when no frame has been
+  // written for this long, so a seek that never reaches the target cannot spin forever.
+  auto lastProgress = std::chrono::steady_clock::now();
 
   while (written < wanted) {
     if (session->listener()->failed()) {
@@ -1080,7 +1142,7 @@ int runHeadless(const Options& options) {
       if (session->listener()->ended() && written > 0) {
         break;
       }
-      if (std::chrono::steady_clock::now() - lastNewFrame >= 10s) {
+      if (std::chrono::steady_clock::now() - lastProgress >= 10s) {
         break;
       }
       continue;
@@ -1088,10 +1150,15 @@ int runHeadless(const Options& options) {
 
     const int64_t positionUs = frame.timestamp().toTicks(1'000'000);
     if (positionUs < nextCaptureUs) {
-      lastNewFrame = std::chrono::steady_clock::now();
+      if (std::chrono::steady_clock::now() - lastProgress >= 10s) {
+        break;
+      }
       continue;
-    }char name[32] = {};
-    std::snprintf(name, sizeof(name), "frame_%05d.png", written + 1);
+    }
+
+    char name[64] = {};
+    std::snprintf(name, sizeof(name), "frame_%05d_%lldus.png", written + 1,
+                  static_cast<long long>(positionUs));
     const auto path = std::filesystem::path(options.outputDirectory) / name;
     if (!writePng(frame.width(), frame.height(), pixels, path)) {
       std::fprintf(stderr, "error: cannot write '%s'\n", path.string().c_str());
@@ -1102,7 +1169,7 @@ int runHeadless(const Options& options) {
     std::fflush(stdout);
     ++written;
     nextCaptureUs = positionUs + kCaptureIntervalUs;
-    lastNewFrame = std::chrono::steady_clock::now();
+    lastProgress = std::chrono::steady_clock::now();
 
     if (session->listener()->ended() && written > 0) {
       break;
@@ -1113,7 +1180,7 @@ int runHeadless(const Options& options) {
     std::fprintf(stderr, "error: %s\n", session->listener()->error().c_str());
     return 1;
   }
-  printVideoStatistics(session->windowsSink());
+  printVideoStatistics(session->windowsSink(), session->engine());
   std::printf("wrote %d frame(s) to %s\n", written, options.outputDirectory.c_str());
   return written > 0 ? 0 : 1;
 }
@@ -1326,7 +1393,7 @@ int runWindowed(const Options& options, HWND window) {
     ::MsgWaitForMultipleObjectsEx(0, nullptr, 1, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
   }
 
-  printVideoStatistics(gSession->windowsSink());
+  printVideoStatistics(gSession->windowsSink(), gSession->engine());
   gSession.reset();
   return exitCode;
 }
@@ -1344,6 +1411,13 @@ int main(int argc, char** argv) {
   }
   if (!std::filesystem::exists(options->mediaPath)) {
     std::fprintf(stderr, "error: media file not found: %s\n", options->mediaPath.c_str());
+    return 2;
+  }
+  if (isDolbyVisionMedia(options->mediaPath)) {
+    std::fprintf(stderr,
+                 "error: Dolby Vision is not supported by the Windows decoder (Media Foundation has "
+                 "no Dolby Vision processing): %s\n",
+                 options->mediaPath.c_str());
     return 2;
   }
   if (!options->subtitlePath.empty() && !std::filesystem::exists(options->subtitlePath)) {
