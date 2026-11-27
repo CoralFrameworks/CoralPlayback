@@ -25,6 +25,7 @@
 #include <effect/EffectEngine.h>
 
 #include <codec/MediaCodecFactory.h>
+#include <media/registry/MediaEngine.h>
 #include <codec/Utilities.h>
 #include <media/Utilities.h>
 #include <minilog/log.h>
@@ -602,7 +603,13 @@ DecodeVideoRenderer::createDecoder(const std::shared_ptr<MediaFormat>& inputForm
 
   auto videoCodecType = inputFormat->getVideoCodecType();
   auto manufacturer = CodecUtils::getVideoCodecManufacturer(inputFormat->getMimeType(), false);
-  auto decoder = CreateBuiltinVideoCodecFactory()->createVideoDecoder(videoCodecType, manufacturer);
+  // The media engine's video factory wraps the built-in decoders and the optional FFmpeg software
+  // backend; going through it is what lets a codec the platform cannot open use FFmpeg instead.
+  auto& mediaEngine = MediaEngine::getInstance();
+  const auto& videoCodecFactory = mediaEngine.getVideoCodecFactory();
+  auto decoder = videoCodecFactory != nullptr
+                     ? videoCodecFactory->createVideoDecoder(videoCodecType, manufacturer)
+                     : CreateBuiltinVideoCodecFactory()->createVideoDecoder(videoCodecType, manufacturer);
   if (decoder != nullptr) {
     decoder->configure(decoderFormat, decoderSurface);
     decoder->start();

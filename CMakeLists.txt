@@ -576,6 +576,11 @@ target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC event)
 target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC extractor)
 target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC graphics)
 target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC media)
+# The media engine's registry wraps the built-in codec/extractor factories with the optional FFmpeg
+# backend, so the renderer creates decoders through it.
+if (TARGET media-registry)
+  target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC media-registry)
+endif ()
 target_link_libraries(${CORAL_PLAYBACK_TARGET} PUBLIC subtitle)
 target_link_libraries(${CORAL_PLAYBACK_TARGET} PRIVATE minilog)
 target_link_libraries(${CORAL_PLAYBACK_TARGET} PRIVATE yuv)
